@@ -43,8 +43,11 @@ plays the book's narration and highlights each sentence as it is read, turning p
 - Progress goes to Audiobookshelf, not Storyteller:
   - the **audiobook position** (`currentTime`), mapped from the EPUB's audio onto the ABS
     audiobook's timeline, so the ABS apps resume listening at the same sentence;
-  - the **ebook position** (`ebookProgress`, and `ebookLocation` when the readaloud is the book's
-    primary ebook; otherwise ABS's reader is opening a different file whose locations differ);
+  - the **ebook position** (`ebookLocation` + `ebookProgress`), so ABS's own **Read** button opens
+    at the same page. When the book's primary ebook is the regular EPUB (not the readaloud), the
+    position is translated by finding the text at the top of the page in the same chapter of that
+    EPUB (Storyteller rewrites the XHTML, so locations can't be copied across); the same works in
+    reverse when you have been reading in ABS's reader;
   - a real **listening session** (device "NanoHive Read-Along") while audio plays, so listening
     stats count.
 - On open it resumes from whichever position moved last: listening in the ABS app or reading in

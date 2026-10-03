@@ -16,6 +16,7 @@
 
 import './foliate/view.js'
 import { EPUB } from './foliate/epub.js'
+import * as CFI from './foliate/epubcfi.js'
 import { configure, ZipReader, TextWriter, BlobWriter } from './foliate/vendor/zip.js'
 
 configure({ useWebWorkers: false })
@@ -416,13 +417,110 @@ const mimeOf = (p) => {
 }
 
 // ---------------------------------------------------------------------------
+// Positions across two EPUBs of the same book. ABS keeps one ebook position
+// per item and its reader opens the item's primary ebook, which is usually
+// the regular EPUB the readaloud was made from. Storyteller rewrites the
+// XHTML (every sentence gets its own span), so a location in one file means
+// nothing in the other. Positions are carried over by text instead: the words
+// at the top of the page are looked up in the same chapter of the other file.
+// ---------------------------------------------------------------------------
+// Whitespace-collapsed text of a document's body, with a map from each
+// character back to its text node and offset.
+function textMap(doc) {
+  const nodes = []
+  const nodeOf = []
+  const offOf = []
+  const out = []
+  let space = true
+  const root = doc.body || doc.documentElement
+  const walker = doc.createTreeWalker(root, 4 /* SHOW_TEXT */)
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const tag = n.parentElement && n.parentElement.localName
+    if (tag === 'script' || tag === 'style') continue
+    const ni = nodes.push(n) - 1
+    const v = n.nodeValue
+    for (let i = 0; i < v.length; i++) {
+      let ch = v[i]
+      if (ch === '\u00ad') continue
+      if (ch === ' ' || ch === '\n' || ch === '\t' || ch === '\r' || ch === '\u00a0') {
+        if (space) continue
+        ch = ' '
+        space = true
+      } else space = false
+      out.push(ch); nodeOf.push(ni); offOf.push(i)
+    }
+  }
+  return { text: out.join(''), nodes, nodeOf, offOf }
+}
+// Index in textMap(doc).text of a DOM point.
+function textIndexOf(tm, container, offset) {
+  if (container.nodeType === 3) {
+    const ni = tm.nodes.indexOf(container)
+    if (ni >= 0) {
+      for (let k = 0; k < tm.nodeOf.length; k++) {
+        if (tm.nodeOf[k] > ni || (tm.nodeOf[k] === ni && tm.offOf[k] >= offset)) return k
+      }
+      return tm.text.length
+    }
+  }
+  // An element boundary: the first text node at or after it.
+  const doc = container.ownerDocument || container
+  const r = doc.createRange()
+  r.setStart(container, offset)
+  for (let ni = 0; ni < tm.nodes.length; ni++) {
+    let cmp = 1
+    try { cmp = r.comparePoint(tm.nodes[ni], 0) } catch (e) {}
+    if (cmp >= 0) { const k = tm.nodeOf.indexOf(ni); if (k >= 0) return k }
+  }
+  return tm.text.length
+}
+// Find the text at `at` of `from` in `to`; returns an index in `to.text`.
+function matchText(from, at, to) {
+  const expect = from.text.length ? Math.round((at / from.text.length) * to.text.length) : 0
+  const nearest = (needle) => {
+    let best = -1
+    for (let i = to.text.indexOf(needle); i >= 0; i = to.text.indexOf(needle, i + 1)) {
+      if (best < 0 || Math.abs(i - expect) < Math.abs(best - expect)) best = i
+    }
+    return best
+  }
+  for (const len of [80, 48, 28]) {
+    for (const skip of [0, 20, 60, 120]) {
+      const needle = from.text.slice(at + skip, at + skip + len)
+      if (needle.trim().length < Math.min(len, 16)) continue
+      const hit = nearest(needle)
+      if (hit >= 0) return Math.max(0, hit - skip)
+    }
+  }
+  return Math.min(expect, Math.max(0, to.text.length - 1)) // no match: same relative place
+}
+function rangeAtText(doc, tm, k) {
+  const r = doc.createRange()
+  if (!tm.nodes.length) { r.selectNodeContents(doc.body || doc.documentElement); r.collapse(true); return r }
+  k = Math.min(Math.max(0, k), tm.nodeOf.length - 1)
+  r.setStart(tm.nodes[tm.nodeOf[k]], tm.offOf[k])
+  r.collapse(true)
+  return r
+}
+// Matching chapter in the other book: same file path, else same file name,
+// else same spine position (scaled when the spines differ in length).
+function mapSection(fromBook, si, toBook) {
+  const id = fromBook.sections[si] && fromBook.sections[si].id
+  const base = (x) => String(x || '').split('/').pop()
+  let j = toBook.sections.findIndex((x) => x.id === id)
+  if (j < 0) j = toBook.sections.findIndex((x) => base(x.id) === base(id))
+  if (j < 0) j = fromBook.sections.length === toBook.sections.length ? si
+    : Math.round((si / Math.max(1, fromBook.sections.length - 1)) * (toBook.sections.length - 1))
+  return j
+}
+
+// ---------------------------------------------------------------------------
 // ABS progress + listening session
 // ---------------------------------------------------------------------------
 class AbsSync {
-  constructor({ itemId, absDuration, writeCfi }) {
+  constructor({ itemId, absDuration }) {
     this.itemId = itemId
     this.duration = absDuration
-    this.writeCfi = writeCfi // only when the readaloud is the item's primary ebook
     this.session = null
     this.sessionStarting = null
     this.listened = 0 // seconds actually listened since the last session sync
@@ -494,7 +592,15 @@ class AbsSync {
     if (!p) return
     this.pendingEbook = null
     const body = { ebookProgress: clamp01(p.fraction) }
-    if (this.writeCfi && p.cfi) body.ebookLocation = p.cfi
+    // The location in the item's primary ebook (translated when that is not
+    // the readaloud). A page being closed can't wait for that: use the last one.
+    let cfi = p.cfi
+    if (typeof cfi === 'function') {
+      if (keepalive) cfi = p.lastCfi
+      else { try { cfi = await cfi() } catch (e) { cfi = null } }
+    }
+    if (cfi) body.ebookLocation = cfi
+    if (p.onCfi && cfi) p.onCfi(cfi)
     if (!this.session && p.absTime != null) {
       body.currentTime = p.absTime
       body.duration = this.duration
@@ -732,8 +838,16 @@ class ReaderUI {
     this.$('.ra-title b').textContent = this.title
     this.$('.ra-sub').textContent = this.author
     this.absDuration = item.media.duration || 0
-    const primaryIno = item.media.ebookFile && item.media.ebookFile.ino
+    const ef = item.media.ebookFile
+    const primaryIno = ef && ef.ino
     this.primary = primaryIno ? String(primaryIno) === String(this.ino) : this.primary
+    // The primary ebook is another EPUB (the regular one): open it too (index
+    // and OPF only; chapters load when a position is translated).
+    if (!this.primary && primaryIno && (ef.ebookFormat || '').toLowerCase() === 'epub') {
+      this.primaryBookP = makeLoader('/api/items/' + this.itemId + '/file/' + primaryIno)
+        .then((l) => new EPUB(l).init())
+        .catch((e) => { console.warn('[nh-readalong] primary ebook unavailable', e); return null })
+    }
 
     const loader = await makeLoader('/api/items/' + this.itemId + '/file/' + this.ino)
     const book = await new EPUB(loader).init()
@@ -746,7 +860,7 @@ class ReaderUI {
     if (!this.absDuration) this.absDuration = this.tl.total
     this.player = new Player(loader, this.tl, clips)
     this.player.setRate(prefs.rate)
-    this.sync = new AbsSync({ itemId: this.itemId, absDuration: this.absDuration, writeCfi: this.primary })
+    this.sync = new AbsSync({ itemId: this.itemId, absDuration: this.absDuration })
     this.#wirePlayer()
 
     const view = document.createElement('foliate-view')
@@ -784,19 +898,30 @@ class ReaderUI {
     let mine = null
     try { mine = JSON.parse(localStorage.getItem(key) || 'null') } catch (e) {}
     this.lastKey = key
+    this.lastAbsCfi = mine && mine.absCfi
     const absT = p && p.currentTime > 0 ? p.currentTime : null
     const loc = p && p.ebookLocation
     const frac = p && p.ebookProgress
     const audioMovedElsewhere = absT != null && (!mine || Math.abs(absT - (mine.t || 0)) > 3)
-    const ebookMovedElsewhere = (this.primary && loc && (!mine || loc !== mine.cfi)) ||
-      (!this.primary && frac != null && (!mine || Math.abs(frac - (mine.f || 0)) > 0.002))
+    // mine.absCfi is the ebookLocation this reader last wrote.
+    const ebookMovedElsewhere = loc ? (!mine || loc !== (mine.absCfi || mine.cfi))
+      : frac != null && (!mine || Math.abs(frac - (mine.f || 0)) > 0.002)
     if (audioMovedElsewhere && (!ebookMovedElsewhere || !mine || (p.lastUpdate || 0) > (mine.at || 0))) {
       this.player.park(this.toEpub(absT))
       await this.#showClip(this.player.clip, true)
       return
     }
     if (ebookMovedElsewhere) {
-      if (this.primary && loc) { try { await this.view.goTo(loc); return } catch (e) {} }
+      if (loc) {
+        try {
+          const target = this.primary ? loc : await this.#fromPrimaryCfi(loc)
+          if (target) {
+            await this.#nav(() => (typeof target === 'string' ? this.view.goTo(target) : this.view.renderer.goTo(target)))
+            this.lastAbsCfi = loc
+            return
+          }
+        } catch (e) { console.warn('[nh-readalong] could not open at the ABS ebook position', e) }
+      }
       if (frac != null) { await this.view.goToFraction(frac); return }
     }
     if (mine && mine.cfi) { try { await this.view.goTo(mine.cfi); return } catch (e) {} }
@@ -989,13 +1114,66 @@ class ReaderUI {
     if (!loc || !this.sync) return
     const c = this.player.clip
     const absTime = c ? this.toAbs(this.player.globalTime()) : null
-    this.sync.saveReading({ cfi: loc.cfi, fraction: loc.fraction, absTime, paused: !this.player.playing }, immediate)
-    try {
-      localStorage.setItem(this.lastKey, JSON.stringify({
-        cfi: loc.cfi, f: clamp01(loc.fraction),
-        t: absTime != null ? absTime : undefined, at: Date.now(),
-      }))
-    } catch (e) {}
+    const point = this.#pagePoint(loc)
+    const remember = (absCfi) => {
+      try {
+        localStorage.setItem(this.lastKey, JSON.stringify({
+          cfi: loc.cfi, absCfi: absCfi || this.lastAbsCfi, f: clamp01(loc.fraction),
+          t: absTime != null ? absTime : undefined, at: Date.now(),
+        }))
+      } catch (e) {}
+    }
+    remember()
+    this.sync.saveReading({
+      cfi: () => this.#toPrimaryCfi(point),
+      lastCfi: this.lastAbsCfi,
+      onCfi: (cfi) => { this.lastAbsCfi = cfi; remember(cfi) },
+      fraction: loc.fraction, absTime, paused: !this.player.playing,
+    }, immediate)
+  }
+  // The start of the page shown, as a point (ABS's reader expects a point
+  // location, not the page's range).
+  #pagePoint(loc) {
+    const si = secIdx(loc)
+    const doc = this.#docFor(si)
+    if (!loc.range || !doc) return null
+    const r = loc.range.cloneRange()
+    r.collapse(true)
+    let at = 0, tm = null
+    if (!this.primary) { tm = textMap(doc); at = textIndexOf(tm, r.startContainer, r.startOffset) }
+    return { si, range: r, tm, at }
+  }
+  // Location of a page start in the item's primary ebook.
+  async #toPrimaryCfi(pt) {
+    if (!pt) return null
+    if (this.primary) return this.view.getCFI(pt.si, pt.range)
+    const pb = this.primaryBookP && (await this.primaryBookP)
+    if (!pb) return null
+    const j = mapSection(this.book, pt.si, pb)
+    const sec = pb.sections[j]
+    if (!sec || !sec.createDocument) return null
+    const doc = await sec.createDocument()
+    const tm = textMap(doc)
+    const k = matchText(pt.tm, pt.at, tm)
+    return CFI.joinIndir(sec.cfi ?? CFI.fake.fromIndex(j), CFI.fromRange(rangeAtText(doc, tm, k)))
+  }
+  // A location in the primary ebook -> a navigation target in the readaloud.
+  async #fromPrimaryCfi(cfi) {
+    const pb = this.primaryBookP && (await this.primaryBookP)
+    if (!pb) return null
+    const res = pb.resolveCFI(cfi)
+    if (!res || res.index == null) return null
+    const doc = await pb.sections[res.index].createDocument()
+    let r = null
+    try { r = res.anchor(doc) } catch (e) {}
+    const tmFrom = textMap(doc)
+    const at = r ? textIndexOf(tmFrom, r.startContainer, r.startOffset) : 0
+    const si = mapSection(pb, res.index, this.book)
+    const sec = this.book.sections[si]
+    if (!sec || !sec.createDocument) return null
+    const k = matchText(tmFrom, at, textMap(await sec.createDocument()))
+    // Resolved again in the rendered copy of the chapter (same text, same map).
+    return { index: si, anchor: (d) => { const tm = textMap(d); return rangeAtText(d, tm, k) } }
   }
   #tick() {
     const p = this.player
