@@ -497,5 +497,10 @@ server {
 
         sub_filter '</body>'
             '<script><!--# include virtual="/_nh/enhancements.js" --></script><script><!--# include virtual="/_nh/book-details.js" --></script></body>';
+
+        # hobesman fork: theme/custom.js, kept out of the upstream theme files so
+        # the daily upstream merge rarely conflicts.
+        sub_filter '</html>'
+            '<script><!--# include virtual="/_nh/custom.js" --></script></html>';
     }
 }
