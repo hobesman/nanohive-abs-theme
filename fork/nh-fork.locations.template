@@ -3,6 +3,29 @@
 # /etc/nginx/conf.d/nh-fork.locations; no .conf suffix, so nginx only loads it
 # through that include, inside the server block).
 
+js_import nh_fork from nh-fork.js;
+
+# Readaloud index for the Format filter's "Readaloud" value (fork/nh-fork.js).
+# The body is a short list of item ids; the ABS answer for up to 20 books is
+# buffered in memory, so the internal location gets a generous buffer.
+location = /_nh/api/readaloud {
+    auth_request /_nh/api/whoami;
+    client_max_body_size 16k;
+    client_body_buffer_size 16k;
+    js_content nh_fork.readaloud;
+}
+location = /_nh/int/abs-batch {
+    internal;
+    subrequest_output_buffer_size 32m;
+    proxy_pass ${ABS_UPSTREAM}/api/items/batch/get;
+    proxy_method POST;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header Content-Type "application/json";
+    proxy_set_header Accept-Encoding "";
+    proxy_set_header Cookie "";
+    proxy_read_timeout 60s;
+}
+
 # ReadMeABook bridge for the "Request a book" panel (theme/custom.js).
 # NH_RMAB_URL: RMAB's base URL, e.g. http://readmeabook:3030 (empty = off).
 # NH_RMAB_TOKEN: an RMAB API token (rmab_...). It is added here, server side,

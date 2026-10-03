@@ -8648,6 +8648,7 @@
     if (md.explicit) out.push('explicit');
     if (li.isMissing) out.push('missing');
     if (li.isInvalid) out.push('invalid');
+    if (window.__nhForkFormats) out.push(...window.__nhForkFormats(li)); // hobesman fork hook (theme/custom.js)
     return out;
   }
   // value catalog for a filter dimension, with counts, from the fetched items
@@ -9942,7 +9943,8 @@
 
     // Build the composed view (full minified item objects, the same shape the
     // shelf fetches itself, so it can render them natively).
-    const viewSig = key + '|' + nhLf.sort + '|' + nhLf.filter + '|' + nhLf.who + '|' + nhLfFxSig() + '|' + nhRs.sig + '|' + nhCm.sig;
+    const viewSig = key + '|' + nhLf.sort + '|' + nhLf.filter + '|' + nhLf.who + '|' + nhLfFxSig() + '|' + nhRs.sig + '|' + nhCm.sig
+      + '|' + ((window.__nhForkSig && window.__nhForkSig()) || ''); // hobesman fork hook (theme/custom.js)
     if (nhLf.viewSig !== viewSig) {
       nhLf.viewSig = viewSig;
       // series rating = mean of its rated books' averages (same math as the

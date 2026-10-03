@@ -597,3 +597,126 @@
   } catch (e) {}
   setInterval(queueTick, 1500);
 })();
+
+(function () {
+  'use strict';
+
+  // ==========================================
+  // Readaloud index for the Format filter ("Readaloud" value).
+  // The shared list lives on the server (fork/nh-fork.js, /_nh/api/readaloud):
+  // { itemId: { u: updatedAt, n: numFiles, r: 0|1 } }. When the Filter & Sort
+  // menu downloads a library's item list, that same response is read here (no
+  // extra download) and books the list doesn't know yet, or that changed since,
+  // are sent to the server to be checked against ABS, 20 at a time.
+  // enhancements.js asks window.__nhForkFormats(item) for extra format values
+  // and re-renders when window.__nhForkSig() changes (two marked fork hooks).
+  // ==========================================
+  const BATCH = 20;
+  const RA = { map: null, at: 0, sig: '', loading: null, queue: [], queued: new Set(), skip: new Set(), running: false, bumpTimer: null };
+
+  window.__nhForkFormats = (li) => (RA.map && li && RA.map[li.id] && RA.map[li.id].r ? ['Readaloud'] : []);
+  window.__nhForkSig = () => RA.sig;
+
+  const token = () => (window.__nhFork && window.__nhFork.token()) || '';
+  const headers = (json) => {
+    const h = {}; const t = token();
+    if (t) h.Authorization = 'Bearer ' + t;
+    if (json) h['Content-Type'] = 'application/json';
+    return h;
+  };
+
+  // Re-render the filtered shelf, at most every 3 s while a build is running.
+  function bump(now) {
+    clearTimeout(RA.bumpTimer);
+    const go = () => { RA.sig = String(Date.now()); };
+    if (now) go(); else RA.bumpTimer = setTimeout(go, 3000);
+  }
+
+  // The shared index; re-read when older than a minute (other people's
+  // checks land there too). Entries checked in this tab are kept on refresh.
+  function loadIndex() {
+    if (RA.loading && Date.now() - RA.at < 60000) return RA.loading;
+    RA.at = Date.now();
+    RA.loading = fetch('/_nh/api/readaloud', { headers: headers(false), credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((j) => { RA.map = Object.assign((j && j.items) || {}, RA.mine); bump(true); return RA.map; })
+      .catch(() => { RA.loading = null; return RA.map; });
+    return RA.loading;
+  }
+  RA.mine = {};
+  // Load it as soon as there is a session, so it is ready before the Filter &
+  // sort panel is opened (the panel lists its values when it opens).
+  (function early(tries) {
+    if (token()) loadIndex();
+    else if (tries < 40) setTimeout(() => early(tries + 1), 500);
+  })(0);
+
+  function stale(li, map) {
+    const e = map[li.id];
+    return !e || e.u !== li.updatedAt || (typeof li.numFiles === 'number' && e.n !== li.numFiles);
+  }
+
+  function onItemList(results) {
+    loadIndex().then((map) => {
+      if (!map) return;
+      results.forEach((li) => {
+        if (!li || !li.id || li.mediaType === 'podcast' || RA.queued.has(li.id) || RA.skip.has(li.id)) return;
+        if (stale(li, map)) { RA.queued.add(li.id); RA.queue.push(li.id); }
+      });
+      run();
+    });
+  }
+
+  async function check(ids) {
+    const r = await fetch('/_nh/api/readaloud', { method: 'POST', headers: headers(true), credentials: 'include', body: JSON.stringify({ ids }) });
+    if (!r.ok) throw Object.assign(new Error('readaloud check ' + r.status), { status: r.status });
+    return ((await r.json()) || {}).items || {};
+  }
+
+  async function run() {
+    if (RA.running) return;
+    RA.running = true;
+    try {
+      while (RA.queue.length) {
+        const ids = RA.queue.splice(0, BATCH);
+        try {
+          const got = await check(ids);
+          Object.assign(RA.map, got); Object.assign(RA.mine, got);
+        } catch (e) {
+          if (e.status === 502 && ids.length > 1) {
+            // ABS refused the batch (e.g. one book this user can't access): check one by one.
+            for (const id of ids) {
+              try { const got = await check([id]); Object.assign(RA.map, got); Object.assign(RA.mine, got); } catch (er) { RA.skip.add(id); }
+            }
+          } else {
+            ids.forEach((id) => RA.queued.delete(id)); // network trouble: try again next time
+            break;
+          }
+        }
+        ids.forEach((id) => RA.queued.delete(id));
+        bump(false);
+        await new Promise((res) => setTimeout(res, 150)); // stay gentle on ABS
+      }
+    } finally {
+      RA.running = false;
+      bump(true);
+    }
+  }
+
+  // Watch for the menu's full item-list download (items?limit=0).
+  const LIST_RE = /\/api\/libraries\/[^/?#]+\/items\?(?:[^#]*&)?limit=0(?:&|$)/;
+  const origFetch = window.fetch;
+  window.fetch = function (input, init) {
+    const p = origFetch.apply(this, arguments);
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      if (LIST_RE.test(url)) {
+        p.then((res) => {
+          if (!res || !res.ok) return;
+          res.clone().json().then((j) => { if (j && Array.isArray(j.results)) onItemList(j.results); }).catch(() => {});
+        }).catch(() => {});
+      }
+    } catch (e) {}
+    return p;
+  };
+})();

@@ -17,9 +17,11 @@ To keep merges clean, the fork's code lives in its own files:
 | `theme/reader/` | Read-along reader (ES modules, loaded on demand) and its foliate-js copy |
 | `fork/nh-fork.locations.template` | Extra nginx locations |
 | `fork/07-nh-fork.envsh` | Defaults and checks for the fork's env vars |
+| `fork/nh-fork.js` | Server-side (njs) readaloud index |
 
 Upstream files carry only small hooks: one `sub_filter` and one `include` at the end of
-`default.conf.template`, and two `COPY` lines in the `Dockerfile`.
+`default.conf.template`, three `COPY` lines in the `Dockerfile`, and two one-line hooks in
+`theme/enhancements.js` (marked `hobesman fork hook`) for the Readaloud filter.
 
 ## Features
 
@@ -27,6 +29,19 @@ Upstream files carry only small hooks: one `sub_filter` and one `include` at the
 
 On a book's page, a speaker icon sits on the corner of the **Read** button when the book has an
 ebook file with "readaloud" in its filename. Clicking it opens the read-along reader (below).
+
+### Readaloud filter
+
+**Filter & sort → Format → Readaloud** shows only books with a readaloud ebook. ABS's library
+list doesn't include file names, so which books have one is kept in a small shared index on the
+server (`/data/nh/readaloud.json`, keep the `/data/nh` volume):
+
+- When the panel downloads a library's book list, books the index doesn't know yet, or that ABS
+  says changed since (`updatedAt` / file count), are checked: 20 at a time, by the NanoHive
+  container asking ABS (`/api/items/batch/get` with the user's own token). Browsers only say
+  which books to check, never what the answer is.
+- First build for 2,000 books in testing: about 30 s in the background, ABS averaging ~20% of
+  one core; after that only changed books are re-checked.
 
 ### Read-along reader
 

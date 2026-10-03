@@ -46,6 +46,7 @@ RUN chmod +x /docker-entrypoint.d/06-resolver.envsh
 # hobesman fork: extra nginx locations + their env defaults/checks (see fork/)
 COPY fork/nh-fork.locations.template /etc/nginx/templates/nh-fork.locations.template
 COPY --chmod=755 fork/07-nh-fork.envsh /docker-entrypoint.d/07-nh-fork.envsh
+COPY fork/nh-fork.js /etc/nginx/njs/nh-fork.js
 
 # Restrict substitution to OUR vars so nginx's own $host/$http_upgrade survive.
 # Every NH_* var below must match this filter or it will be left literal in the
