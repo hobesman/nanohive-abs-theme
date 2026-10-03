@@ -1,0 +1,27 @@
+#!/bin/sh
+# hobesman fork: sourced by the nginx entrypoint (after 05-check-env and
+# 06-resolver, before 20-envsubst renders the templates).
+#
+# Optional ReadMeABook bridge (fork/nh-fork.locations.template). Both vars are
+# exported even when unset: envsubst only replaces variables that exist, so an
+# unset one would stay as a literal ${...} in the nginx config.
+export NH_RMAB_URL="${NH_RMAB_URL:-}"
+export NH_RMAB_TOKEN="${NH_RMAB_TOKEN:-}"
+
+case "$NH_RMAB_URL" in
+  '') ;;
+  http://*/|https://*/) echo "ERROR: NH_RMAB_URL must not end with a slash (got '$NH_RMAB_URL')" >&2; exit 1 ;;
+  http://*|https://*) ;;
+  *) echo "ERROR: NH_RMAB_URL must start with http:// or https:// (got '$NH_RMAB_URL')" >&2; exit 1 ;;
+esac
+
+# The token lands inside a quoted nginx string, so allow only token characters.
+if [ -n "$NH_RMAB_URL" ]; then
+  case "$NH_RMAB_TOKEN" in
+    rmab_*) ;;
+    *) echo "ERROR: NH_RMAB_URL is set, so NH_RMAB_TOKEN must be an RMAB API token (rmab_...)" >&2; exit 1 ;;
+  esac
+  case "$NH_RMAB_TOKEN" in
+    *[!A-Za-z0-9_-]*) echo "ERROR: NH_RMAB_TOKEN contains unexpected characters" >&2; exit 1 ;;
+  esac
+fi

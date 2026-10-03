@@ -1,0 +1,52 @@
+# hobesman fork: server-level locations, included from default.conf.template.
+# Rendered by the image's envsubst step like the main template (it lands at
+# /etc/nginx/conf.d/nh-fork.locations; no .conf suffix, so nginx only loads it
+# through that include, inside the server block).
+
+# ReadMeABook bridge for the "Request book" panel (theme/custom.js).
+# NH_RMAB_URL: RMAB's base URL, e.g. http://readmeabook:3030 (empty = off).
+# NH_RMAB_TOKEN: an RMAB API token (rmab_...). It is added here, server side,
+# and never reaches the browser. Every route needs a signed-in ABS user, and
+# only RMAB's search and create-request endpoints are reachable.
+# 200 = configured (the theme shows the button), 404 = not. empty_gif rather
+# than `return 200`: a return runs before auth_request and would skip it.
+location = /_nh/rmab/enabled {
+    auth_request /_nh/api/whoami;
+    set $nh_rmab "${NH_RMAB_URL}";
+    if ($nh_rmab = "") { return 404; }
+    empty_gif;
+}
+location = /_nh/rmab/search {
+    auth_request /_nh/api/whoami;
+    limit_except GET { deny all; }
+    set $nh_rmab "${NH_RMAB_URL}";
+    if ($nh_rmab = "") { return 404; }
+    resolver ${NH_RESOLVER} valid=30s ipv6=off;
+    resolver_timeout 5s;
+    proxy_connect_timeout 5s;
+    proxy_pass $nh_rmab/api/audiobooks/search$is_args$args;
+    proxy_set_header Host $proxy_host;
+    proxy_ssl_server_name on;
+    proxy_set_header Authorization "Bearer ${NH_RMAB_TOKEN}";
+    proxy_set_header Cookie "";
+    proxy_set_header Accept-Encoding "";
+    proxy_read_timeout 45s;
+}
+location = /_nh/rmab/request {
+    auth_request /_nh/api/whoami;
+    limit_except POST { deny all; }
+    client_max_body_size 32k;
+    client_body_buffer_size 32k;
+    set $nh_rmab "${NH_RMAB_URL}";
+    if ($nh_rmab = "") { return 404; }
+    resolver ${NH_RESOLVER} valid=30s ipv6=off;
+    resolver_timeout 5s;
+    proxy_connect_timeout 5s;
+    proxy_pass $nh_rmab/api/requests;
+    proxy_set_header Host $proxy_host;
+    proxy_ssl_server_name on;
+    proxy_set_header Authorization "Bearer ${NH_RMAB_TOKEN}";
+    proxy_set_header Cookie "";
+    proxy_set_header Accept-Encoding "";
+    proxy_read_timeout 45s;
+}

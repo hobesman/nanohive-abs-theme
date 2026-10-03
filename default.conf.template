@@ -503,4 +503,7 @@ server {
         sub_filter '</html>'
             '<script><!--# include virtual="/_nh/custom.js" --></script></html>';
     }
+
+    # hobesman fork: extra locations (ReadMeABook bridge), see fork/.
+    include /etc/nginx/conf.d/nh-fork.locations;
 }
