@@ -526,14 +526,17 @@ const THEMES = {
   sepia: { bg: '#f4ecd8', fg: '#433422', link: '#8a5a1c', hl: 'rgba(214,160,60,0.35)' },
   light: { bg: '#ffffff', fg: '#1b1b1b', link: '#7a4f12', hl: 'rgba(240,190,60,0.40)' },
 }
-const RATES = [0.75, 1, 1.15, 1.25, 1.5, 1.75, 2, 2.5]
+const RATES = [0.75, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3] // presets in the speed picker
+const RATE_MIN = 0.5, RATE_MAX = 3, RATE_STEP = 0.05
+const clampRate = (r) => Number((Math.round(Math.min(RATE_MAX, Math.max(RATE_MIN, Number(r) || 1)) / RATE_STEP) * RATE_STEP).toFixed(2))
+const fmtRate = (r) => (Math.round(r * 100) / 100).toString() + '×'
 const prefs = (() => {
   let p = {}
   try { p = JSON.parse(localStorage.getItem('nh-ra-prefs') || '{}') } catch (e) {}
   return {
     theme: THEMES[p.theme] ? p.theme : 'dark',
     size: p.size > 0 ? p.size : 1,
-    rate: RATES.includes(p.rate) ? p.rate : 1,
+    rate: p.rate >= RATE_MIN && p.rate <= RATE_MAX ? clampRate(p.rate) : 1,
     save() { try { localStorage.setItem('nh-ra-prefs', JSON.stringify({ theme: this.theme, size: this.size, rate: this.rate })) } catch (e) {} },
   }
 })()
@@ -591,6 +594,17 @@ const CSS = `
 #nh-ra .ra-seg button { padding: 7px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--ra-fg) 22%, transparent) !important; font-size: .85rem; }
 #nh-ra .ra-seg button.on { border-color: var(--ra-link) !important; color: var(--ra-link); }
 #nh-ra .ra-err { color: #d9776a; }
+#nh-ra .ra-panel.ra-speed { top: auto; bottom: 10px; left: 50%; right: auto; transform: translateX(-50%); width: min(340px, 92vw); padding: 14px 16px 16px; border-radius: 14px; overflow: visible; }
+#nh-ra .ra-speed-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+#nh-ra .ra-speed-head span { font-size: .85rem; opacity: .7; }
+#nh-ra .ra-speed-head b { font-size: 1.35rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+#nh-ra .ra-presets { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+#nh-ra .ra-presets button { height: 34px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--ra-fg) 22%, transparent) !important; font-size: .85rem; font-variant-numeric: tabular-nums; }
+#nh-ra .ra-presets button:hover { border-color: color-mix(in srgb, var(--ra-fg) 50%, transparent) !important; }
+#nh-ra .ra-presets button.on { border-color: var(--ra-link) !important; color: var(--ra-link); font-weight: 600; }
+#nh-ra .ra-fine { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+#nh-ra .ra-fine input { flex: 1; accent-color: var(--ra-link); }
+#nh-ra .ra-fine button { width: 34px; height: 34px; border-radius: 50%; border: 1px solid color-mix(in srgb, var(--ra-fg) 22%, transparent) !important; font-size: 1.1rem; line-height: 1; }
 @media (max-width: 640px) { #nh-ra .ra-turn { display: none; } #nh-ra .ra-ctl { gap: 8px; } }
 `
 
@@ -655,6 +669,8 @@ class ReaderUI {
     this.$ = (s) => el.querySelector(s)
     el.addEventListener('click', (e) => {
       const b = e.target.closest('[data-a]')
+      // A click outside an open panel (other than its own button) closes it.
+      if (this.panel && !e.target.closest('.ra-panel') && !(b && ['toc', 'aa', 'rate'].includes(b.dataset.a))) this.#togglePanel(null)
       if (b && el.contains(b)) this.#action(b.dataset.a, b)
     })
     const seek = this.$('.ra-seek input')
@@ -885,8 +901,9 @@ class ReaderUI {
     st.textContent = this.#docCss()
     doc.head.appendChild(st)
     doc.addEventListener('keydown', this.onKey)
-    // Tap a sentence to read from there.
+    // Tap a sentence to read from there (a tap that closes an open panel doesn't).
     doc.addEventListener('click', (e) => {
+      if (this.panel) { this.#togglePanel(null); return }
       const sel = doc.getSelection && doc.getSelection()
       if (sel && !sel.isCollapsed) return
       if (e.target.closest && e.target.closest('a[href]')) return
@@ -995,12 +1012,9 @@ class ReaderUI {
         return p.play()
       case 'prev': this.followPausedUntil = 0; this.followOnce = true; return p && p.prev()
       case 'next': this.followPausedUntil = 0; this.followOnce = true; return p && p.next()
-      case 'rate': {
-        const i = (RATES.indexOf(prefs.rate) + 1) % RATES.length
-        prefs.rate = RATES[i]; prefs.save()
-        if (p) p.setRate(prefs.rate)
-        return this.#renderRate()
-      }
+      case 'rate': return this.#togglePanel('speed')
+      case 'setrate': this.#setRate(b.dataset.v); return this.#togglePanel(null)
+      case 'raterel': this.#setRate(prefs.rate + Number(b.dataset.v)); return this.#syncSpeedPanel()
       case 'toc': return this.#togglePanel('toc')
       case 'aa': return this.#togglePanel('aa')
       case 'theme': prefs.theme = b.dataset.v; prefs.save(); this.#applyTheme(); return this.#togglePanel('aa', true)
@@ -1041,6 +1055,19 @@ class ReaderUI {
       const walk = (items, depth) => (items || []).map((t) =>
         `<button data-a="goto" data-href="${esc(t.href)}" class="${t.href === cur ? 'cur' : ''}" style="padding-left:${18 + depth * 16}px">${esc(t.label || '')}</button>` + walk(t.subitems, depth + 1)).join('')
       d.innerHTML = walk(this.book.toc, 0) || '<div style="padding:12px 18px;opacity:.7">No table of contents.</div>'
+    } else if (kind === 'speed') {
+      d.className = 'ra-panel ra-speed'
+      d.setAttribute('role', 'dialog')
+      d.setAttribute('aria-label', 'Playback speed')
+      d.innerHTML = `
+        <div class="ra-speed-head"><span>Playback speed</span><b></b></div>
+        <div class="ra-presets">${RATES.map((r) => `<button data-a="setrate" data-v="${r}">${fmtRate(r)}</button>`).join('')}</div>
+        <div class="ra-fine">
+          <button data-a="raterel" data-v="-${RATE_STEP}" title="Slower" aria-label="Slower">−</button>
+          <input type="range" min="${RATE_MIN}" max="${RATE_MAX}" step="${RATE_STEP}" aria-label="Speed">
+          <button data-a="raterel" data-v="${RATE_STEP}" title="Faster" aria-label="Faster">+</button>
+        </div>`
+      d.querySelector('.ra-fine input').addEventListener('input', (e) => { this.#setRate(e.target.value); this.#syncSpeedPanel() })
     } else {
       d.className = 'ra-panel right'
       const th = (k, label) => `<button data-a="theme" data-v="${k}" class="${prefs.theme === k ? 'on' : ''}">${label}</button>`
@@ -1049,6 +1076,22 @@ class ReaderUI {
         <div class="ra-row"><span>Text size</span><div class="ra-seg"><button data-a="size" data-v="-0.1">A−</button><button disabled style="opacity:.7">${Math.round(prefs.size * 100)}%</button><button data-a="size" data-v="0.1">A+</button></div></div>`
     }
     this.$('.ra-main').appendChild(d)
+    if (kind === 'speed') this.#syncSpeedPanel()
+  }
+  #setRate(r) {
+    prefs.rate = clampRate(r)
+    prefs.save()
+    if (this.player) this.player.setRate(prefs.rate)
+    this.#renderRate()
+    this.#renderTime()
+  }
+  #syncSpeedPanel() {
+    const d = this.el.querySelector('.ra-speed')
+    if (!d) return
+    d.querySelector('.ra-speed-head b').textContent = fmtRate(prefs.rate)
+    d.querySelectorAll('.ra-presets button').forEach((x) => x.classList.toggle('on', Math.abs(Number(x.dataset.v) - prefs.rate) < 0.001))
+    const r = d.querySelector('.ra-fine input')
+    if (document.activeElement !== r) r.value = prefs.rate
   }
 
   // ---- rendering ----
@@ -1080,7 +1123,7 @@ class ReaderUI {
   }
   #renderRate() {
     const b = this.el && this.$('.ra-rate')
-    if (b) b.textContent = (prefs.rate % 1 ? prefs.rate : prefs.rate.toFixed(0)) + '×'
+    if (b) b.textContent = fmtRate(prefs.rate)
   }
   #renderTime() {
     if (!this.player || this.seeking) return
