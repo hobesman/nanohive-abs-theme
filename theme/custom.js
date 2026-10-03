@@ -8,7 +8,7 @@
   'use strict';
 
   // ==========================================
-  // Readaloud badge: a speaker icon on the corner of the book page's Play
+  // Readaloud badge: a speaker icon on the corner of the book page's Read
   // button when the item has an ebook file with "readaloud" in its filename.
   // Absolutely positioned inside the button, so the action row's layout (and
   // where it wraps) is unchanged.
@@ -25,8 +25,8 @@
         cursor: help;
     }
     #nh-readaloud-badge svg { width: 15px; height: 15px; }
-    /* core.js forces dark text on everything in the Play button
-       (body #page-wrapper #item-page-wrapper button.abs-btn.bg-success *),
+    /* core.js forces dark text on everything in the Read button
+       (body #page-wrapper #item-page-wrapper button.abs-btn.bg-info *),
        so the badge's colors need a more specific selector to win. */
     body #page-wrapper #item-page-wrapper #nh-readaloud-badge,
     body #page-wrapper #item-page-wrapper #nh-readaloud-badge * {
@@ -82,22 +82,22 @@
       });
   }
 
-  // The Play button in the action row (the same row book-details.js anchors the
-  // ratings under). Not the icon-only play button on the cover hover overlay.
-  // Matched by its label (localized via ABS's strings), then by ABS's green
-  // bg-success class.
-  function findPlayButton() {
+  // The Read button in the action row (the same row book-details.js anchors the
+  // ratings under). ABS only shows it when the item has a primary ebook.
+  // Matched by its label (localized via ABS's strings), then by ABS's
+  // bg-info class.
+  function findReadButton() {
     const row = document.querySelector('#item-page-wrapper .flex.items-center.justify-center.md\\:justify-start.pt-4')
       || document.querySelector('#item-page-wrapper [class*="pt-4 flex"]');
     if (!row) return null;
     const btns = Array.from(row.querySelectorAll(':scope > button'));
     const s = (window.$nuxt && window.$nuxt.$strings) || {};
-    const labels = [s.ButtonPlay, s.ButtonPlaying, 'Play', 'Playing']
+    const labels = [s.ButtonRead, 'Read']
       .filter(Boolean).map((x) => x.toLowerCase());
     const label = (b) => Array.from(b.childNodes)
       .filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim().toLowerCase();
     return btns.find((b) => labels.includes(label(b)))
-      || btns.find((b) => b.classList.contains('bg-success'))
+      || btns.find((b) => b.classList.contains('bg-info'))
       || null;
   }
 
@@ -108,27 +108,27 @@
 
     const file = itemId ? cache[itemId] : '';
     if (itemId && file === undefined) lookup(itemId);
-    const playBtn = itemId && file && file !== 'pending' ? findPlayButton() : null;
+    const btn = itemId && file && file !== 'pending' ? findReadButton() : null;
 
-    if (!playBtn) {
+    if (!btn) {
       if (badge) badge.remove();
       return;
     }
-    if (badge && badge.dataset.item === itemId && badge.parentElement === playBtn) return;
+    if (badge && badge.dataset.item === itemId && badge.parentElement === btn) return;
 
     if (!badge) {
       badge = document.createElement('span');
       badge.id = 'nh-readaloud-badge';
       badge.setAttribute('role', 'img');
       badge.innerHTML = SPEAKER_SVG;
-      // It sits inside the Play button: a click on it should not start playback.
+      // It sits inside the Read button: a click on it should not open the reader.
       badge.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); });
     }
     badge.dataset.item = itemId;
     badge.title = 'Readaloud ebook: ' + file;
     badge.setAttribute('aria-label', badge.title);
-    if (getComputedStyle(playBtn).position === 'static') playBtn.style.position = 'relative';
-    playBtn.appendChild(badge);
+    if (getComputedStyle(btn).position === 'static') btn.style.position = 'relative';
+    btn.appendChild(badge);
   }
 
   let queued = false;
