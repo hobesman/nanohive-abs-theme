@@ -27,9 +27,9 @@ Upstream files carry only small hooks: one `sub_filter` and one `include` at the
 On a book's page, a speaker icon sits on the corner of the **Read** button when the book has an
 ebook file with "readaloud" in its filename. Hover it to see the filename.
 
-### Request book (ReadMeABook)
+### Request a book (ReadMeABook)
 
-A **Request book** button next to the search box opens a search of
+A **Request a book** button next to the search box opens a search of
 [ReadMeABook](https://github.com/kikootwo/readmeabook). Pressing **Request** on a result first
 searches your ABS libraries for similar books (fuzzy title and author match) and lists them, so
 you can check you don't already have it. Confirming sends the request to RMAB. If RMAB is set up

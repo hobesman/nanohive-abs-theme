@@ -3,7 +3,7 @@
 # /etc/nginx/conf.d/nh-fork.locations; no .conf suffix, so nginx only loads it
 # through that include, inside the server block).
 
-# ReadMeABook bridge for the "Request book" panel (theme/custom.js).
+# ReadMeABook bridge for the "Request a book" panel (theme/custom.js).
 # NH_RMAB_URL: RMAB's base URL, e.g. http://readmeabook:3030 (empty = off).
 # NH_RMAB_TOKEN: an RMAB API token (rmab_...). It is added here, server side,
 # and never reaches the browser. Every route needs a signed-in ABS user, and

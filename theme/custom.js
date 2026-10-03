@@ -149,7 +149,7 @@
   'use strict';
 
   // ==========================================
-  // Request book: a top-bar button opening a ReadMeABook search. Requesting a
+  // Request a book: a top-bar button opening a ReadMeABook search. Requesting a
   // result first runs a fuzzy search of the ABS library and asks the user to
   // confirm the book is not already there; only then is it sent to RMAB.
   // RMAB is reached through the /_nh/rmab/* bridge (fork/nh-fork.locations.template),
@@ -253,7 +253,7 @@
       btn.type = 'button';
       btn.id = 'nh-rq-btn';
       btn.title = 'Request a book';
-      btn.innerHTML = ICON_PLUS + '<span class="nh-rq-btn-label">Request book</span>';
+      btn.innerHTML = ICON_PLUS + '<span class="nh-rq-btn-label">Request a book</span>';
       btn.addEventListener('click', openPanel);
     }
     anchor.insertAdjacentElement('afterend', btn);
