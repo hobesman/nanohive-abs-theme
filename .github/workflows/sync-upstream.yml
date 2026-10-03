@@ -1,0 +1,163 @@
+# Keeps this fork up to date with rodzalendo/nanohive-abs-theme.
+#
+# Daily (or on demand from the Actions tab) it merges upstream/main into main.
+#   - Clean merge that passes the checks -> pushed, and the image
+#     ghcr.io/<owner>/nanohive-abs-theme:latest is rebuilt.
+#   - Conflict, failing check, or a push GitHub refuses (upstream changed a
+#     workflow file, which the built-in token may not push) -> nothing is
+#     pushed and an issue labelled "upstream-sync" explains what to do.
+# The issue is closed automatically by the next successful sync.
+#
+# This file and the fork's own changes should stay out of upstream's files as
+# much as possible, so merges rarely conflict.
+
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  packages: write
+
+concurrency:
+  group: sync-upstream
+
+env:
+  UPSTREAM_URL: https://github.com/rodzalendo/nanohive-abs-theme.git
+  UPSTREAM_BRANCH: main
+  BRANCH: main
+  ISSUE_LABEL: upstream-sync
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898283+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch upstream "$UPSTREAM_BRANCH"
+          if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
+            echo "result=up-to-date" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "upstream=$(git rev-parse --short "upstream/$UPSTREAM_BRANCH")" >> "$GITHUB_OUTPUT"
+          if git merge --no-edit "upstream/$UPSTREAM_BRANCH"; then
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt"
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Syntax-check theme scripts
+        if: steps.merge.outputs.result == 'merged'
+        run: for f in theme/*.js; do node --check "$f"; done
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.merge.outputs.result == 'merged'
+      - uses: docker/setup-buildx-action@v3
+        if: steps.merge.outputs.result == 'merged'
+
+      - name: Test build
+        if: steps.merge.outputs.result == 'merged'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha
+
+      - name: Push merge
+        id: push
+        if: steps.merge.outputs.result == 'merged'
+        run: git push origin "HEAD:$BRANCH"
+
+      # A push made with the built-in token does not trigger docker-publish.yml,
+      # so the image is published here, with the same tags it would get there.
+      - name: Log in to GHCR
+        if: steps.push.outcome == 'success'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        if: steps.push.outcome == 'success'
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ env.BRANCH }}
+            type=raw,value=latest
+
+      - name: Build and publish image
+        if: steps.push.outcome == 'success'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.merge.outputs.result }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create "$ISSUE_LABEL" --color FBCA04 \
+            --description 'Automatic upstream sync needs attention' 2>/dev/null || true
+          open_issue=$(gh issue list --label "$ISSUE_LABEL" --state open --json number --jq '.[0].number // empty')
+
+          if [ "$JOB_STATUS" = success ] && [ "$RESULT" != conflict ]; then
+            if [ -n "$open_issue" ]; then
+              gh issue close "$open_issue" --comment "Resolved: sync succeeded ($RESULT). $RUN_URL"
+            fi
+            exit 0
+          fi
+
+          if [ "$RESULT" = conflict ]; then
+            title="Upstream sync: merge conflict"
+            files=$(sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/conflicts.txt")
+            body="Merging upstream \`$UPSTREAM_SHA\` into \`$BRANCH\` conflicts with this fork's changes in:
+
+          $files
+
+          Nothing was pushed; the published image stays on the last good build.
+          Resolve locally (\`git fetch upstream && git merge upstream/$UPSTREAM_BRANCH\`), or ask Claude to resolve it.
+
+          Run: $RUN_URL"
+          else
+            title="Upstream sync: failed"
+            body="Merging upstream \`$UPSTREAM_SHA\` merged cleanly but a later step failed (check, test build, or push).
+          If the push was refused because upstream changed a file under \`.github/workflows/\`, the built-in token is not allowed to push that: click **Sync fork** on the repo page instead, or merge locally.
+
+          Nothing was published; the image stays on the last good build.
+
+          Run: $RUN_URL"
+          fi
+
+          if [ -n "$open_issue" ]; then
+            gh issue comment "$open_issue" --body "$body"
+          else
+            gh issue create --title "$title" --label "$ISSUE_LABEL" --body "$body"
+          fi
