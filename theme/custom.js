@@ -10,6 +10,7 @@
   // ==========================================
   // Readaloud badge: a speaker icon on the corner of the book page's Read
   // button when the item has an ebook file with "readaloud" in its filename.
+  // Clicking it opens the read-along reader.
   // Absolutely positioned inside the button, so the action row's layout (and
   // where it wraps) is unchanged.
   // ==========================================
@@ -22,9 +23,10 @@
         background: var(--nh-canvas, #14110d) !important;
         border: 1.5px solid var(--nh-amber, #e0c27a) !important;
         box-shadow: 0 2px 6px rgba(0,0,0,0.45);
-        cursor: help;
+        cursor: pointer; transition: transform .15s ease;
     }
     #nh-readaloud-badge svg { width: 15px; height: 15px; }
+    #nh-readaloud-badge:hover { transform: scale(1.15); }
     /* core.js forces dark text on everything in the Read button
        (body #page-wrapper #item-page-wrapper button.abs-btn.bg-info *),
        so the badge's colors need a more specific selector to win. */
@@ -45,7 +47,7 @@
     + '<path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
 
   const READALOUD_RE = /readaloud/i;
-  const cache = {}; // itemId -> filename string, '' (none) or 'pending'
+  const cache = {}; // itemId -> readaloudFile() result, '' (none) or 'pending'
 
   function token() {
     if (window.__NH_TOKEN) return window.__NH_TOKEN;
@@ -59,14 +61,19 @@
 
   window.__nhFork = { token: token };
 
+  // -> { name, ino, primary } for the readaloud ebook, or '' when there is none.
   function readaloudFile(item) {
-    const names = [];
+    const files = [];
     ((item && item.libraryFiles) || []).forEach((f) => {
-      if (f && f.fileType === 'ebook' && f.metadata) names.push(f.metadata.filename || '');
+      if (f && f.fileType === 'ebook' && f.metadata) files.push({ name: f.metadata.filename || '', ino: f.ino });
     });
     const ef = item && item.media && item.media.ebookFile;
-    if (ef && ef.metadata) names.push(ef.metadata.filename || '');
-    return names.find((n) => READALOUD_RE.test(n)) || '';
+    if (ef && ef.metadata) files.push({ name: ef.metadata.filename || '', ino: ef.ino });
+    const hit = files.find((f) => READALOUD_RE.test(f.name));
+    if (!hit) return '';
+    const md = (item.media && item.media.metadata) || {};
+    return { name: hit.name, ino: hit.ino, primary: !!(ef && String(ef.ino) === String(hit.ino)),
+      title: md.title || '', author: md.authorName || '' };
   }
 
   function lookup(itemId) {
@@ -121,13 +128,24 @@
     if (!badge) {
       badge = document.createElement('span');
       badge.id = 'nh-readaloud-badge';
-      badge.setAttribute('role', 'img');
+      badge.setAttribute('role', 'button');
+      badge.tabIndex = 0;
       badge.innerHTML = SPEAKER_SVG;
-      // It sits inside the Read button: a click on it should not open the reader.
-      badge.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); });
+      // It sits inside the Read button: its click opens the read-along reader
+      // (theme/reader/readalong.js, loaded on first use), not ABS's reader.
+      const go = (e) => {
+        e.stopPropagation(); e.preventDefault();
+        const f = cache[badge.dataset.item];
+        if (!f || !f.ino) return;
+        import('/_nh/reader/readalong.js')
+          .then((m) => m.open({ itemId: badge.dataset.item, ino: f.ino, primary: f.primary, title: f.title, author: f.author }))
+          .catch((er) => { console.error('[nh-readalong]', er); alert('Could not open the read-along reader.'); });
+      };
+      badge.addEventListener('click', go);
+      badge.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') go(e); });
     }
     badge.dataset.item = itemId;
-    badge.title = 'Readaloud ebook: ' + file;
+    badge.title = 'Read along (' + file.name + ')';
     badge.setAttribute('aria-label', badge.title);
     if (getComputedStyle(btn).position === 'static') btn.style.position = 'relative';
     btn.appendChild(badge);
