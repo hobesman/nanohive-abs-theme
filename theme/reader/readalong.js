@@ -617,6 +617,31 @@ export async function open(opts) {
   try { await ui.start() } catch (e) { ui.fail(e) }
 }
 
+// Stop whatever else is playing in this window before the reader starts, so
+// two books (or the same book twice) never play at once. ABS's own player is
+// closed properly (its closePlayer syncs the position and ends its session),
+// so the reader then resumes from where it stopped. Returns true if anything
+// was stopped.
+function stopOtherPlayback() {
+  let stopped = false
+  try {
+    const find = (vm, depth) => {
+      if (!vm || depth > 60) return null
+      if (vm.playerHandler && typeof vm.closePlayer === 'function') return vm
+      for (const c of vm.$children || []) { const hit = find(c, depth + 1); if (hit) return hit }
+      return null
+    }
+    const absPlayer = window.$nuxt && find(window.$nuxt.$root, 0)
+    if (absPlayer && absPlayer.playerHandler.libraryItem) { absPlayer.closePlayer(); stopped = true }
+  } catch (e) { console.warn('[nh-readalong] could not close the ABS player', e) }
+  if (!stopped) { try { window.$nuxt.$eventBus.$emit('pause-item') } catch (e) {} }
+  // Anything else still playing in the page (another tab of ABS is not ours to stop).
+  document.querySelectorAll('audio, video').forEach((m) => {
+    if (!m.paused && !(current && current.player && m === current.player.audio)) { try { m.pause(); stopped = true } catch (e) {} }
+  })
+  return stopped
+}
+
 class ReaderUI {
   constructor({ itemId, ino, title, author, primary, coverUrl }) {
     this.itemId = itemId
@@ -695,6 +720,8 @@ class ReaderUI {
 
   async start() {
     this.#mount()
+    // Give a closed ABS player a moment to send its final position first.
+    if (stopOtherPlayback()) await new Promise((r) => setTimeout(r, 900))
     const [item, progress] = await Promise.all([
       api('/api/items/' + this.itemId + '?expanded=1'),
       api('/api/me/progress/' + this.itemId).catch(() => null),

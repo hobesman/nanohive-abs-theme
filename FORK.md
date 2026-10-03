@@ -49,6 +49,8 @@ plays the book's narration and highlights each sentence as it is read, turning p
     stats count.
 - On open it resumes from whichever position moved last: listening in the ABS app or reading in
   ABS's own reader is picked up.
+- Opening it stops anything else playing in that browser window first. ABS's own player is
+  closed properly (position saved, session ended), so the reader carries on from where it stopped.
 
 Code: `theme/reader/readalong.js` (loaded on first use) and `theme/reader/foliate/`, an unmodified
 copy of [foliate-js](https://github.com/johnfactotum/foliate-js) (MIT) at commit `78914ae`, used for
