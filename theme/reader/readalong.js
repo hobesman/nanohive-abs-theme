@@ -611,7 +611,7 @@ class ReaderUI {
     this.author = author || ''
     this.primary = !!primary
     this.coverUrl = coverUrl
-    this.followAudio = true
+    this.followPausedUntil = 0 // following the audio is paused (ms timestamp) after a manual page turn
     this.lastRelocate = null
     this.onKey = (e) => this.#key(e)
     this.onHide = () => this.#flush(true)
@@ -698,7 +698,7 @@ class ReaderUI {
     const { clips, files } = await loadTimeline(book, loader)
     if (!clips.length) throw new Error('This EPUB has no read-along audio (no media overlays found).')
     this.clips = clips
-    this.clipById = new Map(clips.map((c) => [c.href + '#' + c.id, c]))
+    this.clipById = new Map(clips.map((c) => [c.si + '#' + c.id, c]))
     this.tl = new Timeline(files, book.media && book.media.duration, 'nh-ra-dur:' + this.itemId + ':' + this.ino)
     if (!this.absDuration) this.absDuration = this.tl.total
     this.player = new Player(loader, this.tl, clips)
@@ -713,6 +713,7 @@ class ReaderUI {
     view.addEventListener('relocate', (e) => this.#onRelocate(e.detail))
     await view.open(book)
     const r = view.renderer
+    r.addEventListener('relocate', (e) => { this.lastReason = e.detail && e.detail.reason })
     r.setAttribute('flow', 'paginated')
     r.setAttribute('gap', '6%')
     r.setAttribute('margin', '40px')
@@ -721,6 +722,7 @@ class ReaderUI {
     this.#applyTheme()
 
     await this.#resume(progress)
+    this.#parkOnPage()
     this.$('.ra-msg').style.display = 'none'
     this.#media()
     this.#renderTime()
@@ -769,7 +771,7 @@ class ReaderUI {
     p.addEventListener('clip', (e) => {
       const c = e.detail
       this.#highlight(c)
-      if (c && this.followAudio) this.#showClip(c).catch(() => {})
+      this.#follow()
       this.#renderChapter()
     })
     p.addEventListener('state', () => {
@@ -780,18 +782,75 @@ class ReaderUI {
       else if (!p.loadingFile && !p.audio.ended) { this.sync.syncListening(this.toAbs(p.globalTime()), { force: true }); this.#saveReading(true) }
     })
     p.addEventListener('loading', (e) => this.$('.ra-play').classList.toggle('busy', !!e.detail))
-    p.addEventListener('time', () => this.#renderTime())
+    p.addEventListener('time', () => { this.#renderTime(); this.#follow() })
     p.addEventListener('error', (e) => this.#toast(e.detail))
     p.addEventListener('finished', () => {
       this.sync.syncListening(this.absDuration, { force: true })
     })
   }
+  // Navigate by section index + element id (not by href: foliate and the SMIL
+  // can spell the same path differently).
   async #showClip(c, force) {
-    const res = this.view.resolveNavigation(c.href + (c.id ? '#' + c.id : ''))
-    if (!res) return
+    if (!c) return
     if (!force && this.#isVisible(c)) return
+    await this.#nav(() => this.view.renderer.goTo({ index: c.si, anchor: c.id ? (doc) => doc.getElementById(c.id) || 0 : 0 }))
+  }
+  async #nav(fn) {
     this.programmatic = true
-    try { await this.view.renderer.goTo(res) } finally { this.programmatic = false }
+    this.navBusy = true
+    try { await fn() } finally { this.programmatic = false; this.navBusy = false }
+  }
+  // Keep the narrated text on screen while playing: go to a sentence that is
+  // off the page, and turn the page part-way through a sentence that runs
+  // onto the next one, once the audio reaches the part on the next page.
+  #follow() {
+    const p = this.player
+    const c = p && p.clip
+    if (!c || !this.view || this.navBusy || Date.now() < this.followPausedUntil) return
+    if (!this.#isVisible(c)) {
+      // Already turned past this sentence's first part: don't go back to it.
+      if (this.turnedFor === c.i && p.playing) return
+      // Paused, only follow an explicit move (previous/next sentence); a page
+      // the reader turned to stays put.
+      if (p.playing || this.followOnce || !this.lastRelocate) this.#showClip(c).catch(() => {})
+      this.followOnce = false
+      return
+    }
+    this.followOnce = false
+    if (!p.playing || p.fileIndex !== c.file || !(c.end > c.begin)) return
+    if (this.turnedFor === c.i) return
+    const shown = this.#shownFraction(c)
+    if (shown >= 1) return
+    const heard = (p.audio.currentTime - c.begin) / (c.end - c.begin)
+    if (heard >= shown) {
+      this.turnedFor = c.i
+      this.#nav(() => this.view.renderer.next()).catch(() => {})
+    }
+  }
+  // Share of a sentence's text, from its start, that is on the current page
+  // (1 when it ends on this page; 0 when it starts after it).
+  #shownFraction(c) {
+    const loc = this.lastRelocate
+    const doc = this.#docFor(c.si)
+    const el = doc && c.id && doc.getElementById(c.id)
+    if (!el || !loc || !loc.range) return 1
+    try {
+      const all = doc.createRange()
+      all.selectNodeContents(el)
+      const vis = loc.range
+      if (vis.compareBoundaryPoints(Range.END_TO_END, all) >= 0) return 1
+      // START_TO_END compares the page's end with the sentence's start.
+      if (vis.compareBoundaryPoints(Range.START_TO_END, all) <= 0) return 0
+      const total = all.toString().length
+      if (!total) return 1
+      const part = all.cloneRange()
+      part.setEnd(vis.endContainer, vis.endOffset)
+      const shown = part.toString().length
+      // foliate's visible range can stop a character or two short of the end
+      // of the page; only a real run-on (a word or more) counts.
+      if (total - shown <= 4) return 1
+      return shown / total
+    } catch (e) { return 1 }
   }
   #docFor(index) {
     const hit = (this.view.renderer.getContents() || []).find((x) => x.index === index)
@@ -833,9 +892,8 @@ class ReaderUI {
       if (e.target.closest && e.target.closest('a[href]')) return
       for (let n = e.target; n && n.nodeType === 1; n = n.parentElement) {
         if (!n.id) continue
-        const href = this.book.sections[index] && this.book.sections[index].id
-        const c = this.clipById.get(href + '#' + n.id)
-        if (c) { this.followAudio = true; this.player.seekClip(c.i, true).catch((er) => this.#toast(er)); return }
+        const c = this.clipById.get(index + '#' + n.id)
+        if (c) { this.followPausedUntil = 0; this.player.seekClip(c.i, true).catch((er) => this.#toast(er)); return }
       }
     })
     const c = this.player && this.player.clip
@@ -844,28 +902,41 @@ class ReaderUI {
   #onRelocate(loc) {
     this.lastRelocate = loc
     this.#renderChapter(loc)
-    if (this.programmatic) { this.#saveReading(); return }
-    // The reader turned the page themselves: stop following the audio until
-    // they press play or tap a sentence; when paused, move the audio along.
-    if (this.player.playing) {
-      const c = this.player.clip
-      if (c && !this.#isVisible(c)) this.followAudio = false
-    } else {
-      const first = this.#firstVisibleClip(loc)
-      if (first && (!this.player.clip || !this.#isVisible(this.player.clip))) this.player.park(this.player.clipStart(first))
-    }
-    this.#saveReading()
+    const programmatic = this.programmatic
+    // The renderer's own relocate event (which carries the reason) is handled
+    // after this one, so decide once it has been seen.
+    setTimeout(() => {
+      const byUser = !programmatic && ['page', 'snap', 'scroll'].includes(this.lastReason)
+      if (byUser) {
+        if (this.player.playing) {
+          // Reading ahead or back while it plays: let them look for a while,
+          // then the page follows the narration again.
+          const c = this.player.clip
+          if (c && !this.#isVisible(c)) this.followPausedUntil = Date.now() + 10000
+        } else {
+          // Paused: the audio moves to the page they turned to.
+          this.#parkOnPage(loc)
+        }
+      }
+      this.#saveReading()
+    }, 0)
+  }
+  // While paused, make the audio start at the page shown (unless the current
+  // sentence is already on it).
+  #parkOnPage(loc = this.lastRelocate) {
+    if (this.player.playing) return
+    const first = this.#firstVisibleClip(loc)
+    if (first && (!this.player.clip || !this.#isVisible(this.player.clip))) this.player.park(this.player.clipStart(first))
   }
   #firstVisibleClip(loc) {
     if (!loc || !loc.range) return null
     const doc = this.#docFor(secIdx(loc))
-    const href = this.book.sections[secIdx(loc)] && this.book.sections[secIdx(loc)].id
     if (!doc) return null
     for (const c of this.clips) {
       if (c.si < secIdx(loc)) continue
       if (c.si > secIdx(loc)) return c // nothing read aloud on this page: the next sentence that is
       const el = c.id && doc.getElementById(c.id)
-      if (c.href === href && el) { try { if (loc.range.intersectsNode(el)) return c } catch (e) {} }
+      if (el) { try { if (loc.range.intersectsNode(el)) return c } catch (e) {} }
     }
     return null
   }
@@ -916,14 +987,14 @@ class ReaderUI {
       case 'play':
         if (!p) return
         if (p.playing) return p.pause()
-        this.followAudio = true
+        this.followPausedUntil = 0
         if (!p.clip || (!this.#isVisible(p.clip) && this.lastRelocate)) {
           const first = this.#firstVisibleClip(this.lastRelocate)
           if (first) return p.seekClip(first.i, true).catch((e) => this.#toast(e))
         }
         return p.play()
-      case 'prev': this.followAudio = true; return p && p.prev()
-      case 'next': this.followAudio = true; return p && p.next()
+      case 'prev': this.followPausedUntil = 0; this.followOnce = true; return p && p.prev()
+      case 'next': this.followPausedUntil = 0; this.followOnce = true; return p && p.next()
       case 'rate': {
         const i = (RATES.indexOf(prefs.rate) + 1) % RATES.length
         prefs.rate = RATES[i]; prefs.save()
@@ -937,7 +1008,7 @@ class ReaderUI {
       case 'goto': {
         this.#togglePanel(null)
         const href = b.dataset.href
-        this.followAudio = true
+        this.followPausedUntil = 0
         return this.view.goTo(href).then(() => {
           const res = this.view.resolveNavigation(href)
           const c = res && this.clips.find((x) => x.si >= res.index)
