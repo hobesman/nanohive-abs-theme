@@ -526,8 +526,8 @@ const THEMES = {
   sepia: { bg: '#f4ecd8', fg: '#433422', link: '#8a5a1c', hl: 'rgba(214,160,60,0.35)' },
   light: { bg: '#ffffff', fg: '#1b1b1b', link: '#7a4f12', hl: 'rgba(240,190,60,0.40)' },
 }
-const RATES = [0.75, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3] // presets in the speed picker
-const RATE_MIN = 0.5, RATE_MAX = 3, RATE_STEP = 0.05
+const RATES = [0.75, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5] // presets in the speed picker
+const RATE_MIN = 0.5, RATE_MAX = 5, RATE_STEP = 0.05
 const clampRate = (r) => Number((Math.round(Math.min(RATE_MAX, Math.max(RATE_MIN, Number(r) || 1)) / RATE_STEP) * RATE_STEP).toFixed(2))
 const fmtRate = (r) => (Math.round(r * 100) / 100).toString() + '×'
 const prefs = (() => {
@@ -598,7 +598,7 @@ const CSS = `
 #nh-ra .ra-speed-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
 #nh-ra .ra-speed-head span { font-size: .85rem; opacity: .7; }
 #nh-ra .ra-speed-head b { font-size: 1.35rem; font-weight: 600; font-variant-numeric: tabular-nums; }
-#nh-ra .ra-presets { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+#nh-ra .ra-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 #nh-ra .ra-presets button { height: 34px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--ra-fg) 22%, transparent) !important; font-size: .85rem; font-variant-numeric: tabular-nums; }
 #nh-ra .ra-presets button:hover { border-color: color-mix(in srgb, var(--ra-fg) 50%, transparent) !important; }
 #nh-ra .ra-presets button.on { border-color: var(--ra-link) !important; color: var(--ra-link); font-weight: 600; }

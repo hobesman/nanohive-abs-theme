@@ -35,7 +35,7 @@ plays the book's narration and highlights each sentence as it is read, turning p
 (EPUB 3 Media Overlays, as made by [Storyteller](https://gitlab.com/storyteller-platform/storyteller)).
 
 - Play/pause (Space), previous/next sentence (↑/↓), page turns (←/→ or the page edges), speed
-  (presets from 0.75× to 3×, or any speed from 0.5× to 3× in 0.05 steps),
+  (presets from 0.75× to 5×, or any speed from 0.5× to 5× in 0.05 steps),
   contents, theme (dark/sepia/light) and text size. Tap a sentence to read from there.
 - Lock-screen / headphone controls through the browser's Media Session API.
 - The EPUB is read from ABS with HTTP range requests: only the parts being read or played are
