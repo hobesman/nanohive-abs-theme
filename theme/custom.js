@@ -720,3 +720,196 @@
     return p;
   };
 })();
+
+(function () {
+  'use strict';
+
+  // ==========================================
+  // Search bar: close matches when there are few exact ones.
+  // ABS's library search only finds the query as one exact substring, so a
+  // missing word, a different word order or a typo finds nothing. When the
+  // theme's global search (enhancements.js, nhGsRun) has fewer than MIN_EXACT
+  // book hits, it calls window.__nhForkGsMore (a marked fork hook). This asks
+  // ABS about each significant word on its own (and the first letters of long
+  // words, so a typo later in the word still hits), scores what comes back
+  // against the whole query and appends the good ones under "Similar matches".
+  // ==========================================
+  const MIN_EXACT = 5;
+  const MAX_BOOKS = 8, MAX_OTHER = 4;
+  const STOP = new Set(['the', 'a', 'an', 'of', 'and', 'in', 'on', 'to', 'for', 'at', 'by', 'with', 'from', 'de', 'la', 'le', 'el', 'der', 'die', 'das']);
+
+  const norm = (s) => {
+    s = String(s || '').toLowerCase();
+    try { s = s.normalize('NFD').replace(/[̀-ͯ]/g, ''); } catch (e) {}
+    return s.replace(/[^a-z0-9]+/g, ' ').trim();
+  };
+  const words = (s) => norm(s).split(' ').filter(Boolean);
+
+  // Edit distance, stopping early once it exceeds `max`.
+  function lev(a, b, max) {
+    if (Math.abs(a.length - b.length) > max) return max + 1;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      let best = i;
+      for (let j = 1; j <= b.length; j++) {
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        if (cur[j] < best) best = cur[j];
+      }
+      if (best > max) return max + 1;
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+  // How well one query word matches a word list: 1 exact or as a prefix of 3+
+  // letters, 0.8 within one or two typos, else 0.
+  function wordHit(q, list) {
+    let best = 0;
+    for (const w of list) {
+      if (w === q) return 1;
+      if (q.length >= 3 && w.startsWith(q)) best = Math.max(best, 0.95);
+      else if (q.length >= 4) {
+        const max = q.length >= 8 ? 2 : 1;
+        if (lev(q, w, max) <= max) best = Math.max(best, 0.8);
+        else if (w.length > q.length && lev(q, w.slice(0, q.length), max) <= max) best = Math.max(best, 0.7);
+      }
+    }
+    return best;
+  }
+  function bigrams(s) {
+    const x = s.replace(/ /g, ''); const m = new Map();
+    for (let i = 0; i < x.length - 1; i++) { const g = x.slice(i, i + 2); m.set(g, (m.get(g) || 0) + 1); }
+    return m;
+  }
+  function dice(a, b) {
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    const A = bigrams(a), B = bigrams(b);
+    let inter = 0, tot = 0;
+    A.forEach((n, g) => { tot += n; if (B.has(g)) inter += Math.min(n, B.get(g)); });
+    B.forEach((n) => { tot += n; });
+    return tot ? (2 * inter) / tot : 0;
+  }
+  // 0..1: share of the query's words found (fuzzily) in the text, plus how
+  // alike the query and the main field are as a whole.
+  function score(qWords, qNorm, main, extra) {
+    const list = words(main + ' ' + (extra || ''));
+    if (!qWords.length || !list.length) return 0;
+    const cover = qWords.reduce((a, w) => a + wordHit(w, list), 0) / qWords.length;
+    return 0.75 * cover + 0.25 * dice(qNorm, norm(main));
+  }
+
+  function queryTerms(qWords) {
+    const sig = qWords.filter((w) => w.length >= 3 && !STOP.has(w)).sort((a, b) => b.length - a.length).slice(0, 3);
+    const terms = [];
+    sig.forEach((w) => { terms.push(w); if (w.length >= 6) terms.push(w.slice(0, 4)); });
+    return Array.from(new Set(terms)).slice(0, 5);
+  }
+
+  window.__nhForkGsMore = async function (q, exact, libs, tok) {
+    if (!exact || exact.books.length >= MIN_EXACT || !libs || !libs.length) return null;
+    const qNorm = norm(q);
+    const all = words(q);
+    const qWords = all.filter((w) => !STOP.has(w)).length ? all.filter((w) => !STOP.has(w)) : all;
+    const terms = queryTerms(all);
+    if (!terms.length) return null;
+    const h = { Authorization: 'Bearer ' + tok };
+    const res = await Promise.all(libs.flatMap((lib) => terms.map((t) =>
+      fetch('/api/libraries/' + lib.id + '/search?q=' + encodeURIComponent(t) + '&limit=25', { headers: h, credentials: 'include' })
+        .then((r) => (r.ok ? r.json() : null)).catch(() => null)
+        .then((j) => ({ lib, j })))));
+
+    // Candidates, keyed like the exact list (normalized title|author and names).
+    const bookKey = (title, author) => norm(title) + '|' + norm(author);
+    const have = {
+      books: new Set(exact.books.map((b) => bookKey(b.title, b.author))),
+      series: new Set(exact.series.map((s) => norm(s.name))),
+      authors: new Set(exact.authors.map((a) => norm(a.name))),
+    };
+    const books = new Map(), series = new Map(), authors = new Map();
+    res.forEach(({ lib, j }) => {
+      if (!j) return;
+      (j.book || []).concat(j.podcast || []).forEach((b) => {
+        const li = b.libraryItem;
+        if (!li) return;
+        const md = (li.media && li.media.metadata) || {};
+        const author = md.authorName || md.author || '';
+        const key = bookKey(md.title, author);
+        if (have.books.has(key)) return;
+        let row = books.get(key);
+        if (!row) {
+          const sc = score(qWords, qNorm, (md.title || '') + ' ' + (md.subtitle || ''), author + ' ' + (md.seriesName || '') + ' ' + (md.narratorName || ''));
+          row = { title: md.title || '?', author, copies: [], _s: sc };
+          books.set(key, row);
+        }
+        if (!row.copies.some((c) => c.itemId === li.id)) row.copies.push({ itemId: li.id, lib });
+      });
+      (j.series || []).forEach((s) => {
+        const se = s.series || s;
+        if (!se || !se.name) return;
+        const key = norm(se.name);
+        if (have.series.has(key)) return;
+        let row = series.get(key);
+        if (!row) { row = { name: se.name, copies: [], _s: score(qWords, qNorm, se.name) }; series.set(key, row); }
+        if (!row.copies.some((c) => c.seriesId === se.id)) row.copies.push({ seriesId: se.id, lib });
+      });
+      (j.authors || []).forEach((a) => {
+        if (!a || !a.name) return;
+        const key = norm(a.name);
+        if (have.authors.has(key)) return;
+        let row = authors.get(key);
+        if (!row) { row = { name: a.name, copies: [], _s: score(qWords, qNorm, a.name) }; authors.set(key, row); }
+        if (!row.copies.some((c) => c.authorId === a.id)) row.copies.push({ authorId: a.id, lib });
+      });
+    });
+    // Keep the good ones: most of the words found, or very alike overall.
+    const pick = (m, max) => Array.from(m.values()).filter((r) => r._s >= 0.6).sort((a, b) => b._s - a._s).slice(0, max);
+    const more = {
+      books: pick(books, Math.max(0, MAX_BOOKS - exact.books.length)),
+      series: pick(series, MAX_OTHER),
+      authors: pick(authors, MAX_OTHER),
+    };
+    if (!more.books.length && !more.series.length && !more.authors.length) return null;
+    // Tell the panel decorator below where the close matches start.
+    GS.split = { books: exact.books.length, series: exact.series.length, authors: exact.authors.length };
+    GS.counts = { books: more.books.length, series: more.series.length, authors: more.authors.length };
+    return { books: exact.books.concat(more.books), series: exact.series.concat(more.series), authors: exact.authors.concat(more.authors) };
+  };
+
+  // Label the close matches in the results panel: a "Similar matches" divider
+  // in each section where they start. The panel is rebuilt on every render, so
+  // this re-applies itself; GS.split is cleared when a new search starts.
+  const GS = { split: null, counts: null };
+  const css = document.createElement('style');
+  css.textContent = `
+    #nh-gs-panel .nh-gs-similar { padding: 6px 14px 2px; font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--nh-muted-2, #8a8075); opacity: .85; font-style: italic; }
+  `;
+  document.head.appendChild(css);
+  function decorate(panel) {
+    if (!GS.split || panel.querySelector('.nh-gs-similar')) return;
+    const order = ['books', 'series', 'authors'].filter((k) => GS.split[k] + GS.counts[k] > 0);
+    let sec = -1, inSec = 0;
+    for (const el of Array.from(panel.children)) {
+      if (el.classList.contains('nh-gs-head')) { sec++; inSec = 0; continue; }
+      if (!el.classList.contains('nh-gs-row')) continue;
+      const k = order[sec];
+      if (k && GS.counts[k] && inSec === GS.split[k]) {
+        const d = document.createElement('div');
+        d.className = 'nh-gs-similar';
+        d.textContent = GS.split[k] ? 'Similar matches' : 'No exact matches. Similar:';
+        el.before(d);
+      }
+      inSec++;
+    }
+  }
+  try {
+    new MutationObserver(() => {
+      const panel = document.getElementById('nh-gs-panel');
+      if (panel) decorate(panel);
+    }).observe(document.body, { childList: true, subtree: true });
+  } catch (e) {}
+  // A new search clears the labels until its own close matches arrive.
+  document.addEventListener('input', (e) => {
+    if (e.target && e.target.closest && e.target.closest('#appbar form[role="search"]')) { GS.split = null; GS.counts = null; }
+  }, true);
+})();

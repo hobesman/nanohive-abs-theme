@@ -5704,6 +5704,7 @@
         nhGs.results = nhGsMerge(res);
         nhGs.sel = -1;
         nhGsRender();
+        if (window.__nhForkGsMore) window.__nhForkGsMore(q, nhGs.results, libs, tok).then((m) => { if (m && seq === nhGs.seq) { nhGs.results = m; nhGsRender(); } }, () => {}); // hobesman fork hook (theme/custom.js)
       });
     });
   }

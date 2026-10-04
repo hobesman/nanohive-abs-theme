@@ -20,8 +20,9 @@ To keep merges clean, the fork's code lives in its own files:
 | `fork/nh-fork.js` | Server-side (njs) readaloud index |
 
 Upstream files carry only small hooks: one `sub_filter` and one `include` at the end of
-`default.conf.template`, three `COPY` lines in the `Dockerfile`, and two one-line hooks in
-`theme/enhancements.js` (marked `hobesman fork hook`) for the Readaloud filter.
+`default.conf.template`, three `COPY` lines in the `Dockerfile`, and three one-line hooks in
+`theme/enhancements.js` (marked `hobesman fork hook`): two for the Readaloud filter, one for
+search.
 
 ## Features
 
@@ -29,6 +30,16 @@ Upstream files carry only small hooks: one `sub_filter` and one `include` at the
 
 On a book's page, a speaker icon sits on the corner of the **Read** button when the book has an
 ebook file with "readaloud" in its filename. Clicking it opens the read-along reader (below).
+
+### Search: similar matches
+
+ABS's library search only finds the typed text as one exact string. When the search bar finds
+fewer than 5 books, it also looks for close matches and lists them under **Similar matches**:
+words in any order, a missing or extra word, small typos (one or two letters off), in titles,
+authors and series. It asks ABS about each significant word separately (and the first letters
+of long words, to catch typos later in the word), then ranks the results by how many of the
+typed words they match. That is a handful of extra small searches, only when the exact search
+came up short.
 
 ### Readaloud filter
 
