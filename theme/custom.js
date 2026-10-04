@@ -737,6 +737,24 @@
   // narrator (the books they read), with the reason shown under the author.
   // ==========================================
   const MIN_EXACT = 5;
+
+  // The server adds similar matches to searches that find nothing (for the
+  // apps; fork/nh-fork.js). This search bar does its own, with labels, so its
+  // searches ask the server not to.
+  const SEARCH_RE = /\/api\/libraries\/[^/?#]+\/search\?/;
+  const fetch0 = window.fetch;
+  window.fetch = function (input, init) {
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      if (SEARCH_RE.test(url)) {
+        init = Object.assign({}, init);
+        const h = new Headers(init.headers || (typeof input !== 'string' && input.headers) || undefined);
+        h.set('X-NH-No-Fuzzy', '1');
+        init.headers = h;
+      }
+    } catch (e) {}
+    return fetch0.call(this, input, init);
+  };
   const MAX_BOOKS = 8, MAX_OTHER = 4;
   const STOP = new Set(['the', 'a', 'an', 'of', 'and', 'in', 'on', 'to', 'for', 'at', 'by', 'with', 'from', 'de', 'la', 'le', 'el', 'der', 'die', 'das']);
 

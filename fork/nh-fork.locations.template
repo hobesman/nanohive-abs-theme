@@ -26,6 +26,24 @@ location = /_nh/int/abs-batch {
     proxy_read_timeout 60s;
 }
 
+# Library search: similar matches when ABS finds nothing (fork/nh-fork.js,
+# search). Regex location, so it wins over the theme's `location /` for this
+# one ABS endpoint; everything is still answered by ABS through the internal
+# location below (same headers, so ABS's own auth applies).
+location ~ ^/api/libraries/(?<nh_lib>[A-Za-z0-9_-]+)/search$ {
+    js_content nh_fork.search;
+}
+location /_nh/int/abs-api/ {
+    internal;
+    # A search reply is buffered whole: up to 50 full book records.
+    subrequest_output_buffer_size 16m;
+    proxy_pass ${ABS_UPSTREAM}/api/;
+    proxy_set_header Accept-Encoding "";
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $nh_fwd_proto;
+    proxy_read_timeout 60s;
+}
+
 # ReadMeABook bridge for the "Request a book" panel (theme/custom.js).
 # NH_RMAB_URL: RMAB's base URL, e.g. http://readmeabook:3030 (empty = off).
 # NH_RMAB_TOKEN: an RMAB API token (rmab_...). It is added here, server side,

@@ -42,6 +42,14 @@ of long words, to catch typos later in the word), then ranks the results by how 
 typed words they match. That is a handful of extra small searches, only when the exact search
 came up short.
 
+**Apps too.** Searches from apps (or ABS's own web UI) that go through NanoHive are handled on the
+server (`fork/nh-fork.js`): a search ABS finds **nothing** for is answered with similar matches
+instead, in ABS's own format with full book records, so apps show them as ordinary results (the
+reply carries an `X-NH-Similar: 1` header). Any search with even one exact result is passed
+through untouched, so exact results are never delayed. Apps that talk to ABS directly, not
+through NanoHive, are not affected. The theme's search bar marks its own searches
+(`X-NH-No-Fuzzy`) so the server leaves them alone.
+
 ### Readaloud filter
 
 **Filter & sort → Format → Readaloud** shows only books with a readaloud ebook. ABS's library
