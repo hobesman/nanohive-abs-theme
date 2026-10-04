@@ -809,8 +809,17 @@
     return Array.from(new Set(terms)).slice(0, 5);
   }
 
-  window.__nhForkGsMore = async function (q, exact, libs, tok) {
-    if (!exact || exact.books.length >= MIN_EXACT || !libs || !libs.length) return null;
+  window.__nhForkGsMore = function (q, exact, libs, tok) {
+    if (!exact || exact.books.length >= MIN_EXACT || !libs || !libs.length) return Promise.resolve(null);
+    // While this runs the panel says so (instead of a bare "No results").
+    GS.awaiting = 0;
+    GS.pending = q;
+    refreshPanel();
+    return findMore(q, exact, libs, tok).finally(() => {
+      if (GS.pending === q) { GS.pending = null; refreshPanel(); }
+    });
+  };
+  async function findMore(q, exact, libs, tok) {
     const qNorm = norm(q);
     const all = words(q);
     const qWords = all.filter((w) => !STOP.has(w)).length ? all.filter((w) => !STOP.has(w)) : all;
@@ -907,19 +916,46 @@
     GS.split = { books: exact.books.length, series: exact.series.length, authors: exact.authors.length };
     GS.counts = { books: more.books.length, series: more.series.length, authors: more.authors.length };
     return { books: exact.books.concat(more.books), series: exact.series.concat(more.series), authors: exact.authors.concat(more.authors) };
-  };
+  }
 
   // Label the close matches in the results panel: a "Similar matches" divider
   // in each section where they start. The panel is rebuilt on every render, so
   // this re-applies itself; GS.split is cleared when a new search starts.
-  const GS = { split: null, counts: null };
+  // awaiting: typed, the exact search hasn't answered yet (timestamp)
+  const GS = { split: null, counts: null, pending: null, awaiting: 0 };
   const css = document.createElement('style');
   css.textContent = `
     #nh-gs-panel .nh-gs-similar { padding: 6px 14px 2px; font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--nh-muted-2, #8a8075); opacity: .85; font-style: italic; }
   `;
   document.head.appendChild(css);
   function decorate(panel) {
-    if (!GS.split || panel.querySelector('.nh-gs-similar')) return;
+    // Similar search still running: say so.
+    const msg = panel.querySelector(':scope > .nh-gs-msg');
+    const line = panel.querySelector('.nh-gs-pending');
+    // The theme draws an empty result list during its typing pause, before
+    // any search has run: that is "searching", not "no results".
+    if (!GS.pending && GS.awaiting && Date.now() - GS.awaiting < 8000) {
+      if (msg && !msg.dataset.nhOrig && !panel.querySelector('.nh-gs-row') && !/…$/.test(msg.textContent)) {
+        msg.dataset.nhOrig = msg.textContent;
+        msg.textContent = 'Searching…';
+      }
+      return;
+    }
+    if (GS.pending) {
+      if (msg && !panel.querySelector('.nh-gs-row') && msg.textContent !== 'No exact matches. Searching for similar results…') {
+        if (!msg.dataset.nhOrig) msg.dataset.nhOrig = msg.textContent;
+        msg.textContent = 'No exact matches. Searching for similar results…';
+      } else if (!msg && !line) {
+        const d = document.createElement('div');
+        d.className = 'nh-gs-similar nh-gs-pending';
+        d.textContent = 'Searching for similar matches…';
+        panel.appendChild(d);
+      }
+    } else {
+      if (msg && msg.dataset.nhOrig) { msg.textContent = msg.dataset.nhOrig; delete msg.dataset.nhOrig; }
+      if (line) line.remove();
+    }
+    if (!GS.split || panel.querySelector('.nh-gs-simlabel')) return;
     const order = ['books', 'series', 'authors'].filter((k) => GS.split[k] + GS.counts[k] > 0);
     let sec = -1, inSec = 0;
     for (const el of Array.from(panel.children)) {
@@ -928,12 +964,16 @@
       const k = order[sec];
       if (k && GS.counts[k] && inSec === GS.split[k]) {
         const d = document.createElement('div');
-        d.className = 'nh-gs-similar';
+        d.className = 'nh-gs-similar nh-gs-simlabel';
         d.textContent = GS.split[k] ? 'Similar matches' : 'No exact matches. Similar:';
         el.before(d);
       }
       inSec++;
     }
+  }
+  function refreshPanel() {
+    const panel = document.getElementById('nh-gs-panel');
+    if (panel) decorate(panel);
   }
   try {
     new MutationObserver(() => {
@@ -943,6 +983,9 @@
   } catch (e) {}
   // A new search clears the labels until its own close matches arrive.
   document.addEventListener('input', (e) => {
-    if (e.target && e.target.closest && e.target.closest('#appbar form[role="search"]')) { GS.split = null; GS.counts = null; }
+    if (e.target && e.target.closest && e.target.closest('#appbar form[role="search"]')) {
+      GS.split = null; GS.counts = null; GS.pending = null;
+      GS.awaiting = (e.target.value || '').trim().length >= 2 ? Date.now() : 0;
+    }
   }, true);
 })();
