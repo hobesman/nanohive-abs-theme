@@ -36,7 +36,8 @@ ebook file with "readaloud" in its filename. Clicking it opens the read-along re
 ABS's library search only finds the typed text as one exact string. When the search bar finds
 fewer than 5 books, it also looks for close matches and lists them under **Similar matches**:
 words in any order, a missing or extra word, small typos (one or two letters off), in titles,
-authors and series. It asks ABS about each significant word separately (and the first letters
+authors, series and narrators. A matching series also brings its books, and a matching narrator
+the books they read; the reason is shown under the author ("read by …", or the series name). It asks ABS about each significant word separately (and the first letters
 of long words, to catch typos later in the word), then ranks the results by how many of the
 typed words they match. That is a handful of extra small searches, only when the exact search
 came up short.

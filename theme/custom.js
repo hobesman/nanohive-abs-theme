@@ -733,6 +733,8 @@
   // ABS about each significant word on its own (and the first letters of long
   // words, so a typo later in the word still hits), scores what comes back
   // against the whole query and appends the good ones under "Similar matches".
+  // Books also come in through a matching series (its books) or a matching
+  // narrator (the books they read), with the reason shown under the author.
   // ==========================================
   const MIN_EXACT = 5;
   const MAX_BOOKS = 8, MAX_OTHER = 4;
@@ -802,7 +804,8 @@
   function queryTerms(qWords) {
     const sig = qWords.filter((w) => w.length >= 3 && !STOP.has(w)).sort((a, b) => b.length - a.length).slice(0, 3);
     const terms = [];
-    sig.forEach((w) => { terms.push(w); if (w.length >= 6) terms.push(w.slice(0, 4)); });
+    // The word, plus its first letters so a typo later in the word still finds it.
+    sig.forEach((w) => { terms.push(w); if (w.length >= 6) terms.push(w.slice(0, 4)); else if (w.length >= 4) terms.push(w.slice(0, 3)); });
     return Array.from(new Set(terms)).slice(0, 5);
   }
 
@@ -827,31 +830,52 @@
       authors: new Set(exact.authors.map((a) => norm(a.name))),
     };
     const books = new Map(), series = new Map(), authors = new Map();
+    // A book candidate; `via` (series or narrator match) scores it and is
+    // shown next to the author so it is clear why the book is listed.
+    // Books inside series results come without authors, so rows are also
+    // tracked by item id: the same book from two paths is one row.
+    const exactIds = new Set(exact.books.flatMap((b) => b.copies.map((c) => c.itemId)));
+    const byItem = new Map();
+    const addBook = (li, lib, via) => {
+      if (!li || exactIds.has(li.id)) return;
+      const md = (li.media && li.media.metadata) || {};
+      const author = md.authorName || md.author || (md.authors || []).map((a) => a && a.name).filter(Boolean).join(', ');
+      if (author && have.books.has(bookKey(md.title, author))) return;
+      const sc = via ? via.s * 0.95
+        : score(qWords, qNorm, (md.title || '') + ' ' + (md.subtitle || ''), author + ' ' + (md.seriesName || '') + ' ' + (md.narratorName || ''));
+      let row = byItem.get(li.id) || (author && books.get(bookKey(md.title, author)));
+      if (!row) {
+        row = { title: md.title || '?', author: '', copies: [], _s: -1, _a: author, _via: '' };
+        books.set(author ? bookKey(md.title, author) : 'id:' + li.id, row);
+      }
+      byItem.set(li.id, row);
+      if (author && !row._a) row._a = author;
+      if (sc > row._s) { row._s = sc; row._via = via ? via.note : ''; }
+      row.author = [row._a, row._via].filter(Boolean).join(' · ');
+      if (!row.copies.some((c) => c.itemId === li.id)) row.copies.push({ itemId: li.id, lib });
+    };
+    const narrators = new Map(); // normalized name -> { name, s, libs: Set }
     res.forEach(({ lib, j }) => {
       if (!j) return;
-      (j.book || []).concat(j.podcast || []).forEach((b) => {
-        const li = b.libraryItem;
-        if (!li) return;
-        const md = (li.media && li.media.metadata) || {};
-        const author = md.authorName || md.author || '';
-        const key = bookKey(md.title, author);
-        if (have.books.has(key)) return;
-        let row = books.get(key);
-        if (!row) {
-          const sc = score(qWords, qNorm, (md.title || '') + ' ' + (md.subtitle || ''), author + ' ' + (md.seriesName || '') + ' ' + (md.narratorName || ''));
-          row = { title: md.title || '?', author, copies: [], _s: sc };
-          books.set(key, row);
-        }
-        if (!row.copies.some((c) => c.itemId === li.id)) row.copies.push({ itemId: li.id, lib });
-      });
+      (j.book || []).concat(j.podcast || []).forEach((b) => addBook(b.libraryItem, lib));
       (j.series || []).forEach((s) => {
         const se = s.series || s;
         if (!se || !se.name) return;
         const key = norm(se.name);
+        const sc = have.series.has(key) ? 1 : score(qWords, qNorm, se.name);
+        // The books of a matching series (also of one already listed as an exact hit).
+        if (sc >= 0.6) (s.books || []).forEach((li) => addBook(li, lib, { s: sc, note: se.name }));
         if (have.series.has(key)) return;
         let row = series.get(key);
-        if (!row) { row = { name: se.name, copies: [], _s: score(qWords, qNorm, se.name) }; series.set(key, row); }
+        if (!row) { row = { name: se.name, copies: [], _s: sc }; series.set(key, row); }
         if (!row.copies.some((c) => c.seriesId === se.id)) row.copies.push({ seriesId: se.id, lib });
+      });
+      (j.narrators || []).forEach((n) => {
+        if (!n || !n.name) return;
+        const key = norm(n.name);
+        let row = narrators.get(key);
+        if (!row) { row = { name: n.name, s: score(qWords, qNorm, n.name), libs: new Set() }; narrators.set(key, row); }
+        row.libs.add(lib);
       });
       (j.authors || []).forEach((a) => {
         if (!a || !a.name) return;
@@ -862,6 +886,15 @@
         if (!row.copies.some((c) => c.authorId === a.id)) row.copies.push({ authorId: a.id, lib });
       });
     });
+    // Books read by a matching narrator (ABS's search names narrators but not
+    // their books; the library's narrator filter lists them).
+    const b64 = (x) => btoa(unescape(encodeURIComponent(x)));
+    const topNarrators = Array.from(narrators.values()).filter((n) => n.s >= 0.6).sort((a, b) => b.s - a.s).slice(0, 2);
+    await Promise.all(topNarrators.flatMap((n) => Array.from(n.libs).map((lib) =>
+      fetch('/api/libraries/' + lib.id + '/items?limit=6&filter=' + encodeURIComponent('narrators.' + b64(n.name)), { headers: h, credentials: 'include' })
+        .then((r) => (r.ok ? r.json() : null)).catch(() => null)
+        .then((d) => ((d && d.results) || []).forEach((li) => addBook(li, lib, { s: n.s, note: 'read by ' + n.name }))))));
+
     // Keep the good ones: most of the words found, or very alike overall.
     const pick = (m, max) => Array.from(m.values()).filter((r) => r._s >= 0.6).sort((a, b) => b._s - a._s).slice(0, max);
     const more = {
