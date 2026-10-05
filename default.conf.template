@@ -498,6 +498,11 @@ server {
         sub_filter '</body>'
             '<script><!--# include virtual="/_nh/enhancements.js" --></script><script><!--# include virtual="/_nh/book-details.js" --></script></body>';
 
+        # hobesman fork: theme/custom-early.js, request caches that must be in
+        # place before any theme script runs (top of <head>, before core.js).
+        sub_filter '<head>'
+            '<head><script><!--# include virtual="/_nh/custom-early.js" --></script>';
+
         # hobesman fork: theme/custom.js, kept out of the upstream theme files so
         # the daily upstream merge rarely conflicts.
         sub_filter '</html>'

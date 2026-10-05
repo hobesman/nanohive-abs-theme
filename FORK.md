@@ -14,12 +14,13 @@ To keep merges clean, the fork's code lives in its own files:
 | File | What |
 |---|---|
 | `theme/custom.js` | All fork UI (injected after the upstream theme scripts) |
+| `theme/custom-early.js` | Request caches (series badge data, Filter & sort list), injected first in `<head>` |
 | `theme/reader/` | Read-along reader (ES modules, loaded on demand) and its foliate-js copy |
 | `fork/nh-fork.locations.template` | Extra nginx locations |
 | `fork/07-nh-fork.envsh` | Defaults and checks for the fork's env vars |
 | `fork/nh-fork.js` | Server-side (njs) readaloud index |
 
-Upstream files carry only small hooks: one `sub_filter` and one `include` at the end of
+Upstream files carry only small hooks: two `sub_filter`s and one `include` at the end of
 `default.conf.template`, three `COPY` lines in the `Dockerfile`, and small changes in
 `theme/enhancements.js` (marked `hobesman fork`): three one-line hooks (two for the Readaloud
 filter, one for search), a small hook for the Filter & sort list cache, and a few performance
@@ -34,7 +35,9 @@ Big libraries loaded slowly through the theme (seconds, versus under one directl
   answers one request at a time, so the page's own startup requests waited behind it. It is
   now kept in the browser (series and book ids only, about 1/20 of the size), refreshed in the
   background at most every 6 hours once the page is showing, and fetched the first time only
-  after the page is showing (`theme/custom.js`).
+  after the page is showing (`theme/custom-early.js`). The caches load first in the page: from
+  the end of the page (where `custom.js` loads) they could lose a race with the theme's first
+  requests on a big page, which in the field let the series request through on a full load.
 - **Filter & sort book list**: the panel can't show anything until it has the whole library's
   book list, which ABS takes seconds to produce on a big library, and the theme threw it away
   whenever you left the library page, so every return meant waiting again (8 s reported). The
@@ -66,7 +69,8 @@ Big libraries loaded slowly through the theme (seconds, versus under one directl
 - **Timing report** for troubleshooting: add `?nhtiming=1` to any NanoHive address (remembered;
   `?nhtiming=0` turns it off), reload, and read the `[NanoHive timing]` lines in the browser
   console (`copy(__nhTiming)` copies them). Long-task time is per page (from its start until
-  the report, 3 s after it showed).
+  the report, 3 s after it showed). `busiestScripts` lists what did the work (Chrome's Long
+  Animation Frames: which script or callback, how long, and how much was forced layout).
 
 ## Features
 
