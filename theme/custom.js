@@ -1013,14 +1013,25 @@
 
   // ==========================================
   // Load-timing report (troubleshooting slow page loads). Off by default.
-  // Turn on in the browser console:   localStorage.setItem('nh-timing', '1')
-  // then reload. Each page load / navigation prints a report to the console
-  // and keeps it in window.__nhTiming (copy(__nhTiming) copies it all).
-  // Turn off:                         localStorage.removeItem('nh-timing')
+  // Turn on: open any NanoHive page with ?nhtiming=1 added to the address
+  // (remembered in this browser; ?nhtiming=0 turns it off again), or in the
+  // console: localStorage.setItem('nh-timing', '1'). Each page load and
+  // navigation prints a report to the console and keeps it in
+  // window.__nhTiming (copy(__nhTiming) copies it all).
   // ==========================================
   let on = false;
-  try { on = localStorage.getItem('nh-timing') === '1' || /[?&]nhtiming\b/.test(location.search); } catch (e) {}
+  try {
+    const m = /[?&]nhtiming(?:=([01]))?(?:&|$)/.exec(location.search);
+    if (m) {
+      if (m[1] === '0') localStorage.removeItem('nh-timing');
+      else localStorage.setItem('nh-timing', '1');
+    }
+    on = localStorage.getItem('nh-timing') === '1';
+  } catch (e) {
+    on = /[?&]nhtiming(?:=1)?(?:&|$)/.test(location.search); // storage blocked: this load only
+  }
   if (!on) return;
+  try { console.info('[NanoHive timing] on. Turn off with ?nhtiming=0'); } catch (e) {}
 
   const ms = (x) => Math.round(x);
   const reports = window.__nhTiming = [];
