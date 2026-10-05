@@ -5081,6 +5081,20 @@
   // Only the `left` of each card is touched, its inline translate3d and the Vue
   // sizing chain (entitiesPerShelf / bookshelfMarginLeft) are left alone, since
   // overriding those broke card widths and collapsed the series view on resize.
+  // hobesman fork: the shelf width is kept current by a ResizeObserver instead
+  // of reading clientWidth on every tick (each read forced a full layout while
+  // a big shelf was being built). Content-box changes cover window resizes and
+  // the scrollbar appearing or going.
+  const nhShelfW = { el: null, w: 0, ro: null };
+  function nhShelfWidth(bs) {
+    if (nhShelfW.el !== bs) {
+      if (nhShelfW.ro) nhShelfW.ro.disconnect();
+      nhShelfW.el = bs;
+      nhShelfW.w = bs.clientWidth;
+      try { nhShelfW.ro = new ResizeObserver(() => { nhShelfW.w = bs.clientWidth; }); nhShelfW.ro.observe(bs); } catch (e) { nhShelfW.ro = null; }
+    }
+    return nhShelfW.ro ? nhShelfW.w : bs.clientWidth;
+  }
   function nhShelfNudge() {
     const bs = document.getElementById('bookshelf');
     if (!bs || document.body.classList.contains('nh-home')) return;
@@ -5098,7 +5112,7 @@
     const tec = vm.totalEntityCardWidth;                    // card + trailing gap
     const cw = vm.cardWidth || vm.entityWidth || (tec - 24);
     const block = (eps - 1) * tec + cw;                     // no gap after the last card
-    const want = (bs.clientWidth - block) / 2;
+    const want = (nhShelfWidth(bs) - block) / 2;
     // Clamp kept as a guard against a vm caught mid-rebuild reporting nonsense.
     const next = Math.max(-60, Math.min(60, Math.round(want - vm.bookshelfMarginLeft)));
     const cur = parseFloat(bs.style.getPropertyValue('--nh-shelf-nudge')) || 0;
@@ -13958,6 +13972,7 @@
   // its owner component knows the item id. book-details.js paints the line.
   function nhEditModalGoodreads() {
     if (typeof window.__nhCmMount !== 'function') return;
+    if (!document.documentElement.classList.contains('modal-open') && !document.getElementById('nh-em-cm')) return; // hobesman fork: no window open, skip the forced style recalc below on every tick
     const mods = document.querySelectorAll('.modal');
     for (let i = 0; i < mods.length; i++) {
       const m = mods[i];

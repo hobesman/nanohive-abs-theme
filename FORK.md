@@ -20,9 +20,26 @@ To keep merges clean, the fork's code lives in its own files:
 | `fork/nh-fork.js` | Server-side (njs) readaloud index |
 
 Upstream files carry only small hooks: one `sub_filter` and one `include` at the end of
-`default.conf.template`, three `COPY` lines in the `Dockerfile`, and three one-line hooks in
-`theme/enhancements.js` (marked `hobesman fork hook`): two for the Readaloud filter, one for
-search.
+`default.conf.template`, three `COPY` lines in the `Dockerfile`, and small changes in
+`theme/enhancements.js` (marked `hobesman fork`): three one-line hooks (two for the Readaloud
+filter, one for search) and two performance fixes (see Performance).
+
+## Performance
+
+Big libraries loaded slowly through the theme (seconds, versus under one directly in ABS):
+
+- **Series badge data** (series completion badges): the theme asked ABS for every series with
+  all its books on each full page load. That takes ABS seconds on a big library, and ABS
+  answers one request at a time, so the page's own startup requests waited behind it. It is
+  now kept in the browser (series and book ids only, about 1/20 of the size), refreshed in the
+  background at most every 6 hours once the page is showing, and fetched the first time only
+  after the page is showing (`theme/custom.js`).
+- Two per-update layout reads in `enhancements.js` (the edit window's Goodreads line, the shelf
+  centring) forced the browser to lay out the whole page on every theme update while a big
+  shelf was built; both now skip that work.
+- **Timing report** for troubleshooting: add `?nhtiming=1` to any NanoHive address (remembered;
+  `?nhtiming=0` turns it off), reload, and read the `[NanoHive timing]` lines in the browser
+  console (`copy(__nhTiming)` copies them).
 
 ## Features
 

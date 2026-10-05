@@ -703,6 +703,13 @@
     }
   }
 
+  function afterShown(fn) {
+    const t0 = Date.now();
+    const ok = () => document.body && (document.body.classList.contains('nh-page-ready') || document.body.classList.contains('nh-series-ready'));
+    const go = () => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 3000 }) : setTimeout(fn, 200));
+    (function wait() { if (ok() || Date.now() - t0 > 8000) go(); else setTimeout(wait, 200); })();
+  }
+
   // Watch for the menu's full item-list download (items?limit=0).
   const LIST_RE = /\/api\/libraries\/[^/?#]+\/items\?(?:[^#]*&)?limit=0(?:&|$)/;
   const origFetch = window.fetch;
@@ -713,7 +720,11 @@
       if (LIST_RE.test(url)) {
         p.then((res) => {
           if (!res || !res.ok) return;
-          res.clone().json().then((j) => { if (j && Array.isArray(j.results)) onItemList(j.results); }).catch(() => {});
+          // Copy now (the theme reads the original), read it once the page is
+          // showing and the browser is idle: a big library's list is megabytes,
+          // and parsing it a second time must not slow the page down.
+          const copy = res.clone();
+          afterShown(() => copy.json().then((j) => { if (j && Array.isArray(j.results)) onItemList(j.results); }).catch(() => {}));
         }).catch(() => {});
       }
     } catch (e) {}
@@ -1112,4 +1123,75 @@
       console.groupEnd();
     } catch (e) {}
   }
+})();
+
+(function () {
+  'use strict';
+
+  // ==========================================
+  // Series badge data: cached, and never fetched during page load.
+  // The theme's series completion badge (enhancements.js, nhSpEnsureMap) asks
+  // ABS for EVERY series with all its books (series?limit=100000&page=0) on
+  // each full page load. On a big library that takes ABS seconds (and ABS
+  // answers one thing at a time, so the requests the page needs to appear
+  // wait behind it), and the browser then spends seconds parsing megabytes.
+  // The badge only uses series id -> book ids, which rarely changes, so that
+  // request is answered here from a slim per-library copy kept in this
+  // browser; the copy is refreshed in the background once the page is showing,
+  // at most every 6 hours. The first time (no copy yet) the request is held
+  // until the page is showing, so the badges appear a moment later instead of
+  // the whole page waiting for them.
+  // ==========================================
+  const RE = /\/api\/libraries\/([^/?#]+)\/series\?limit=100000&page=0$/;
+  const TTL = 6 * 3600 * 1000;
+  const key = (lib) => 'nh-spmap:' + lib;
+  function readCache(lib) {
+    try {
+      const c = JSON.parse(localStorage.getItem(key(lib)) || 'null');
+      return c && Array.isArray(c.results) ? c : null;
+    } catch (e) { return null; }
+  }
+  function writeCache(lib, results) {
+    try { localStorage.setItem(key(lib), JSON.stringify({ at: Date.now(), results })); } catch (e) {}
+  }
+  const slim = (d) => ((d && d.results) || []).filter((s) => s && s.id).map((s) => ({
+    id: s.id,
+    books: (s.books || []).map((b) => ({ id: b.id || b.libraryItemId })).filter((b) => b.id),
+  }));
+  const respond = (results) => new Response(JSON.stringify({ results, total: results.length }), {
+    status: 200, headers: { 'Content-Type': 'application/json' },
+  });
+  // Resolves once the theme has shown the page (or after 8 s regardless).
+  function pageShown() {
+    return new Promise((res) => {
+      const ok = () => document.body && (document.body.classList.contains('nh-page-ready') || document.body.classList.contains('nh-series-ready'));
+      if (ok()) return res();
+      const t0 = Date.now();
+      const iv = setInterval(() => { if (ok() || Date.now() - t0 > 8000) { clearInterval(iv); res(); } }, 200);
+    });
+  }
+  const refreshing = {};
+  function refresh(f0, input, init, lib) {
+    if (!refreshing[lib]) {
+      refreshing[lib] = pageShown()
+        .then(() => f0(input, init))
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('series ' + r.status))))
+        .then((d) => { const s = slim(d); writeCache(lib, s); return s; })
+        .finally(() => { delete refreshing[lib]; });
+    }
+    return refreshing[lib];
+  }
+  const f0 = window.fetch;
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const m = RE.exec(url.split('#')[0]);
+    if (!m) return f0.apply(this, arguments);
+    const lib = m[1];
+    const c = readCache(lib);
+    if (c) {
+      if (Date.now() - c.at > TTL) refresh(f0, input, init, lib).catch(() => {});
+      return Promise.resolve(respond(c.results));
+    }
+    return refresh(f0, input, init, lib).then(respond);
+  };
 })();
