@@ -22,7 +22,8 @@ To keep merges clean, the fork's code lives in its own files:
 Upstream files carry only small hooks: one `sub_filter` and one `include` at the end of
 `default.conf.template`, three `COPY` lines in the `Dockerfile`, and small changes in
 `theme/enhancements.js` (marked `hobesman fork`): three one-line hooks (two for the Readaloud
-filter, one for search) and two performance fixes (see Performance).
+filter, one for search), a small hook for the Filter & sort list cache, and two performance fixes
+(see Performance).
 
 ## Performance
 
@@ -34,6 +35,17 @@ Big libraries loaded slowly through the theme (seconds, versus under one directl
   now kept in the browser (series and book ids only, about 1/20 of the size), refreshed in the
   background at most every 6 hours once the page is showing, and fetched the first time only
   after the page is showing (`theme/custom.js`).
+- **Filter & sort book list**: the panel can't show anything until it has the whole library's
+  book list, which ABS takes seconds to produce on a big library, and the theme threw it away
+  whenever you left the library page, so every return meant waiting again (8 s reported). The
+  list is now kept in the browser (in memory, and in IndexedDB across reloads; per user and
+  per filter/sort, at most 8 lists), answered at once and refreshed in the background: as soon
+  as ABS reports a book added, changed or removed (its live updates; progress updates only for
+  lists filtered or sorted by progress), and otherwise when the copy is over 2 minutes old as
+  the panel asks for it (10 minutes when loaded ahead). A newer copy replaces the one on
+  screen. The list is also loaded ahead once the library page is showing, so the panel opens
+  at once. With ABS taking 8 s for the list in testing: back on the library page, the panel
+  opened in 0.2–0.5 s instead of 7–8 s, and only the first visit ever has to wait.
 - Two per-update layout reads in `enhancements.js` (the edit window's Goodreads line, the shelf
   centring) forced the browser to lay out the whole page on every theme update while a big
   shelf was built; both now skip that work.

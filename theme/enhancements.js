@@ -8895,6 +8895,7 @@
         // items: limit=0 = unlimited; series: limit=0 returns ZERO rows, use a big cap
         const url = '/api/libraries/' + libId + '/' + (nhLf.mode === 'series' ? 'series?limit=100000' : 'items?limit=0') +
           '&filter=' + encodeURIComponent(nat.fb) + '&sort=' + encodeURIComponent(nat.ob) + '&desc=' + (nat.od ? 1 : 0);
+        nhLf.itemsUrl = url; // hobesman fork: list cache (theme/custom.js) swaps in a fresher copy by URL
         fetch(url, { headers: { Authorization: 'Bearer ' + tok }, credentials: 'include' })
           .then((r) => (r.ok ? r.json() : null))
           .then((j) => {
@@ -8906,6 +8907,15 @@
     }
     return { key: key, nat: nat };
   }
+  // hobesman fork hook (theme/custom.js, Filter & sort list cache): warm() loads
+  // the item list ahead of the panel opening; fresh() swaps in a newer copy.
+  window.__nhForkLf = {
+    warm: () => { if (nhLf.libId && nhLf.mode) nhLfEnsureItems(nhLf.libId); },
+    fresh: (url, rows) => {
+      if (nhLf.itemsUrl !== url || !nhLf.items || !Array.isArray(rows)) return;
+      nhLf.items = rows; nhLf.viewSig = ''; nhFf.dataSig = '';
+    },
+  };
 
   // Build a menu row that matches the native listbox markup: li AND inner text
   // span classes are cloned from a real native row so typography/padding always
