@@ -1194,6 +1194,9 @@
   const ms = (x) => Math.round(x);
   const reports = window.__nhTiming = [];
   let longTasks = 0, longTaskCount = 0;
+  // The browser keeps only 250 request timings by default; a full load uses most
+  // of them, which left in-app navigations reporting no requests at all.
+  try { performance.setResourceTimingBufferSize(20000); } catch (e) {}
   try {
     new PerformanceObserver((l) => l.getEntries().forEach((e) => { longTasks += e.duration; longTaskCount++; }))
       .observe({ type: 'longtask', buffered: true });
@@ -1201,7 +1204,7 @@
 
   // When the theme's covers lift: the boot veil (html.nh-ready) and the page
   // mask (body.nh-page-ready / nh-series-ready).
-  let nav = { kind: 'full load', path: location.pathname, start: 0, veil: null, page: null, resFrom: 0 };
+  let nav = { kind: 'full load', path: location.pathname, start: 0, veil: null, page: null, resFrom: 0, lt0: 0, ltn0: 0 };
   const seen = () => {
     const now = performance.now();
     if (nav.veil == null && document.documentElement.classList.contains('nh-ready')) nav.veil = now;
@@ -1225,7 +1228,7 @@
       // ABS adjusts the URL while it boots: still part of the full load.
       if (location.pathname !== before && nav.kind === 'full load' && nav.page == null) nav.path = location.pathname;
       else if (location.pathname !== before) {
-        nav = { kind: 'in-app', path: location.pathname, start: performance.now(), veil: 'n/a', page: null, resFrom: performance.now() };
+        nav = { kind: 'in-app', path: location.pathname, start: performance.now(), veil: 'n/a', page: null, resFrom: performance.now(), lt0: longTasks, ltn0: longTaskCount };
         setTimeout(() => { if (nav.page == null) { const n = nav; report(n, true); } }, 10000);
       }
       return r;
@@ -1251,8 +1254,9 @@
       out.veilLifted = n.veil == null ? 'not yet' : ms(n.veil);
     }
     out.pageShown = n.page == null ? (timedOut ? 'NOT within 10 s' : 'not yet') : ms(n.page - n.start);
-    out.longTasksMs = ms(longTasks);
-    out.longTaskCount = longTaskCount;
+    // From this page's start until the report (3 s after it showed).
+    out.longTasksMs = ms(longTasks - n.lt0);
+    out.longTaskCount = longTaskCount - n.ltn0;
     const res = performance.getEntriesByType('resource').filter((r) => r.startTime >= n.resFrom);
     out.requests = res.length;
     out.slowest = res.slice().sort((a, b) => b.duration - a.duration).slice(0, 12).map((r) => ({
@@ -1341,4 +1345,45 @@
     }
     return refresh(f0, input, init, lib).then(respond);
   };
+})();
+
+(function () {
+  'use strict';
+
+  // ==========================================
+  // Home shelves: one scroll measurement per shelf per frame.
+  // ABS's shelf row (widgets-item-slider) re-measures its scroll width
+  // (setScrollVars) every time ANY of its cards re-renders, and every
+  // measurement forces the browser to lay out the whole page. A home page
+  // visit made ~160 of them in testing (over a second of CPU on a fast
+  // machine; layout is heavier under the theme). Calls are merged into one
+  // per shelf per animation frame; the arrows' state is at most a frame late.
+  // Patched on the component's constructor, so every shelf created later gets
+  // it too.
+  // ==========================================
+  // The component isn't registered globally, so a global mixin catches the
+  // first shelf as it is created (before its methods are bound), and the merged
+  // version is put on its constructor for all later ones.
+  function merge(M) {
+    const orig = M.setScrollVars;
+    M.setScrollVars = function () {
+      const self = this;
+      if (self.__nhSsv) return;
+      self.__nhSsv = requestAnimationFrame(() => {
+        self.__nhSsv = 0;
+        if (!self._isDestroyed) orig.call(self);
+      });
+    };
+    M.setScrollVars.__nh = true;
+  }
+  (function hook(tries) {
+    const Vue = window.$nuxt && window.$nuxt.$root && window.$nuxt.$root.constructor;
+    if (!Vue || typeof Vue.mixin !== 'function') { if (tries < 100) setTimeout(() => hook(tries + 1), 100); return; }
+    Vue.mixin({
+      beforeCreate() {
+        const M = this.constructor && this.constructor.options && this.constructor.options.methods;
+        if (M && typeof M.setScrollVars === 'function' && typeof M.scrollRight === 'function' && !M.setScrollVars.__nh) merge(M);
+      },
+    });
+  })(0);
 })();

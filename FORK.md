@@ -22,8 +22,8 @@ To keep merges clean, the fork's code lives in its own files:
 Upstream files carry only small hooks: one `sub_filter` and one `include` at the end of
 `default.conf.template`, three `COPY` lines in the `Dockerfile`, and small changes in
 `theme/enhancements.js` (marked `hobesman fork`): three one-line hooks (two for the Readaloud
-filter, one for search), a small hook for the Filter & sort list cache, and two performance fixes
-(see Performance).
+filter, one for search), a small hook for the Filter & sort list cache, and a few performance
+fixes (see Performance).
 
 ## Performance
 
@@ -49,9 +49,24 @@ Big libraries loaded slowly through the theme (seconds, versus under one directl
 - Two per-update layout reads in `enhancements.js` (the edit window's Goodreads line, the shelf
   centring) forced the browser to lay out the whole page on every theme update while a big
   shelf was built; both now skip that work.
+- **Busy while idle**: the theme's update pass re-ran about 13 times a second for as long as a
+  page was open, because it re-wrote the app-bar title and the Filter & sort count with the
+  same text every time, and any text write counts as a page change, which queues the next pass.
+  Each pass forced the browser to lay out the page. Those writes now only happen on a change
+  (`enhancements.js`); an idle page went from 24–37% of a CPU core to 2% in testing.
+- **Home page shown late**: the home page waits for the hero carousel when there is a Continue
+  Listening shelf, but it recognised that shelf by the word "continue" in any shelf title, so a
+  Continue Series shelf with nothing in progress meant waiting for a hero that never comes,
+  until a 3.5 s failsafe. It now uses the same rule as the hero (ABS's shelf id).
+  In-app home visits: 3.7 s to 0.8 s in testing.
+- **Home shelf measuring**: ABS re-measures a shelf's scroll width every time any of its cards
+  re-renders (~160 times per home visit), each a full page layout. `custom.js` merges those
+  into one per shelf per frame (a global Vue mixin patches the shelf component as it is created).
+  CPU per home visit: 1.9 s to 0.8 s in testing.
 - **Timing report** for troubleshooting: add `?nhtiming=1` to any NanoHive address (remembered;
   `?nhtiming=0` turns it off), reload, and read the `[NanoHive timing]` lines in the browser
-  console (`copy(__nhTiming)` copies them).
+  console (`copy(__nhTiming)` copies them). Long-task time is per page (from its start until
+  the report, 3 s after it showed).
 
 ## Features
 

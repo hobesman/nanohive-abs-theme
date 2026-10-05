@@ -739,7 +739,10 @@
       }
 
       document.querySelectorAll('#appbar a[href$="/"] h1, #page-wrapper img[alt="Audiobookshelf Logo"] + h1').forEach(function (brand) {
-        brand.textContent = nhSettings.appName || 'audiobookshelf';
+        // hobesman fork: write only on change. Rewriting identical text is still a DOM
+        // change, which re-queued the tick: ~13 ticks/s forever, each forcing layout.
+        const name = nhSettings.appName || 'audiobookshelf';
+        if (brand.textContent !== name) brand.textContent = name;
       });
 
       const shelves = nhShelfRows();
@@ -8880,6 +8883,11 @@
       .catch(() => { nhLf.libTotalFetching = false; });
   }
 
+  // hobesman fork: set text only when it differs. Any text write is a childList
+  // mutation, and the tick's observer re-queues on those, so an unconditional write
+  // from the tick keeps the tick (and its layout reads) running forever.
+  function nhSetText(el, t) { if (el && el.textContent !== t) el.textContent = t; }
+
   function nhLfEnsureItems(libId) {
     const nat = nhLfNative();
     const key = nhLf.mode + '|' + libId + '|' + nat.fb + '|' + nat.ob + '|' + (nat.od ? 1 : 0);
@@ -9948,7 +9956,7 @@
         // native-only filter: shelf total / library total
         nhLfEnsureLibTotal(libId);
         const shown = vm && typeof vm.totalEntities === 'number' ? vm.totalEntities : '…';
-        cnt.textContent = shown + ' / ' + (nhLf.libTotal === null ? '…' : nhLf.libTotal);
+        nhSetText(cnt, shown + ' / ' + (nhLf.libTotal === null ? '…' : nhLf.libTotal)); // hobesman fork: no-op writes re-queued the tick
       }
       nhLfRelease(vm);
       return;
@@ -9963,7 +9971,7 @@
     const needRs = !!(nhLf.filter || nhLf.who || nhLf.sorts.some((s) => s.d === 'rating'));
     const cmReady = nhCmItems();
     const needCm = !!(nhLf.filters.community || nhLf.sorts.some((s) => s.d === 'community'));
-    if (!nhLf.items || (needRs && !rsReady) || (needCm && !cmReady)) { cnt.textContent = '…'; return; } // native shelf stays until ready
+    if (!nhLf.items || (needRs && !rsReady) || (needCm && !cmReady)) { nhSetText(cnt, '…'); return; } // native shelf stays until ready
     if (!vm || typeof vm.fetchEntites !== 'function' || typeof vm.resetEntities !== 'function') return;
 
     // Build the composed view (full minified item objects, the same shape the
@@ -10077,7 +10085,7 @@
       nhLf.view = list.map((x) => x.e);
       nhLf.needReset = true;
     }
-    cnt.textContent = nhLf.view.length + ' / ' + nhLf.items.length;
+    nhSetText(cnt, nhLf.view.length + ' / ' + nhLf.items.length);
 
     // NATIVE-SHELF TAKEOVER: patch the shelf's own page fetcher so it renders
     // OUR list, every card is a real LazyBookCard (hover overlay, play/read,
@@ -11568,7 +11576,7 @@
     if (toolbar) {
       let cnt = toolbar.querySelector('.nh-cl-count-top');
       if (!cnt) { cnt = document.createElement('p'); cnt.className = 'nh-cl-count-top'; toolbar.insertBefore(cnt, toolbar.firstChild); }
-      cnt.textContent = nhCl.list.length + ' ' + nhWordForm(nhCl.list.length, T.colForms || PANEL_T.en.colForms);
+      nhSetText(cnt, nhCl.list.length + ' ' + nhWordForm(nhCl.list.length, T.colForms || PANEL_T.en.colForms)); // hobesman fork
     }
 
     let canEdit = false;
@@ -15603,8 +15611,15 @@
         if (!bs) return;
         const shelves = nhShelfRows();
         if (!shelves.length) return;
-        const clExists = shelves.some(r => nhShelfId(r) === 'continue-listening' ||
-          /continue|kontynuuj|weiter|continu/.test(((r.querySelector('h2') || {}).textContent || '').toLowerCase()));
+        // hobesman fork: same rule as injectHeroBanner (the shelf id when there is
+        // one, the title only without). The title alone also matched "Continue
+        // Series", so with nothing in progress every home visit waited for a hero
+        // that never comes, until the 3.5 s failsafe.
+        const clExists = shelves.some((r) => {
+          const sid = nhShelfId(r);
+          if (sid) return sid === 'continue-listening';
+          return /continue|kontynuuj|weiter|continu/.test(((r.querySelector('h2') || {}).textContent || '').toLowerCase());
+        });
         // The REAL carousel, not its skeleton, with the first-slide-first build it
         // arrives one item-fetch after the shelf, and revealing the skeleton only to
         // swap it a beat later was the last visible home-page flicker.
