@@ -2842,11 +2842,28 @@ body.nh-selecting .nh-rp-badge { visibility: hidden !important; }
       }
   }
 
+  // hobesman fork: measure only when the band changes size. manageLayout runs
+  // every 200ms and from every tick; reading getBoundingClientRect there forced a
+  // full page layout each time the page had changed, 150-260 ms apiece on a big
+  // library's shelf (~12,000 elements for 9,000 books). A ResizeObserver reports
+  // after layout, when the read is free.
+  let nhAbBand = null, nhAbRO = null;
+  function nhWatchAppbar() {
+      if (typeof ResizeObserver !== 'function') { nhMeasureAppbar(); return; }
+      const ab = document.getElementById('appbar');
+      const band = ab && ab.parentElement;
+      if (band === nhAbBand) return;
+      nhAbBand = band;
+      if (!nhAbRO) nhAbRO = new ResizeObserver(function () { nhMeasureAppbar(); });
+      nhAbRO.disconnect();
+      if (band) nhAbRO.observe(band); // reports once right away, then on resize
+  }
+
   function manageLayout() {
       const _p = window.location.pathname;
       document.body.classList.toggle('nh-pad-page', /\/authors?\/[^/]+/.test(_p) || /\/collections?\/[^/]+/.test(_p));
 
-      nhMeasureAppbar();
+      nhWatchAppbar();
 
       const toolbar = document.getElementById('toolbar');
 

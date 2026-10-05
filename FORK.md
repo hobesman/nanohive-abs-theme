@@ -21,7 +21,7 @@ To keep merges clean, the fork's code lives in its own files:
 | `fork/nh-fork.js` | Server-side (njs) readaloud index |
 
 Upstream files carry only small hooks: two `sub_filter`s and one `include` at the end of
-`default.conf.template`, three `COPY` lines in the `Dockerfile`, and small changes in
+`default.conf.template`, one performance fix in `theme/core.js`, three `COPY` lines in the `Dockerfile`, and small changes in
 `theme/enhancements.js` (marked `hobesman fork`): three one-line hooks (two for the Readaloud
 filter, one for search), a small hook for the Filter & sort list cache, and a few performance
 fixes (see Performance).
@@ -42,11 +42,14 @@ Big libraries loaded slowly through the theme (seconds, versus under one directl
   book list, which ABS takes seconds to produce on a big library, and the theme threw it away
   whenever you left the library page, so every return meant waiting again (8 s reported). The
   list is now kept in the browser (in memory, and in IndexedDB across reloads; per user and
-  per filter/sort, at most 8 lists), answered at once and refreshed in the background: as soon
-  as ABS reports a book added, changed or removed (its live updates; progress updates only for
-  lists filtered or sorted by progress), and otherwise when the copy is over 2 minutes old as
-  the panel asks for it (10 minutes when loaded ahead). A newer copy replaces the one on
-  screen. The list is also loaded ahead once the library page is showing, so the panel opens
+  per filter/sort, at most 8 lists), parsed once per page session, answered at once and
+  refreshed in the background: as soon as ABS reports a book added, changed or removed (its
+  live updates; progress updates only for lists filtered or sorted by progress), when the copy
+  is over 6 hours old, and when a quick check (book count + newest book, a one-book request)
+  says the library changed. That check runs when the copy was last checked over 2 minutes ago
+  as the panel asks for it (10 minutes when loaded ahead). Re-downloading a 9,000-book list
+  kept ABS busy for seconds, delaying the home page's own requests, so it only happens when
+  something changed. A newer copy replaces the one on screen. The list is also loaded ahead once the library page is showing, so the panel opens
   at once. With ABS taking 8 s for the list in testing: back on the library page, the panel
   opened in 0.2–0.5 s instead of 7–8 s, and only the first visit ever has to wait.
 - Two per-update layout reads in `enhancements.js` (the edit window's Goodreads line, the shelf
@@ -57,6 +60,11 @@ Big libraries loaded slowly through the theme (seconds, versus under one directl
   same text every time, and any text write counts as a page change, which queues the next pass.
   Each pass forced the browser to lay out the page. Those writes now only happen on a change
   (`enhancements.js`); an idle page went from 24–37% of a CPU core to 2% in testing.
+- **App bar measuring**: `core.js` measured the app bar's height (for the toolbar position)
+  every 200 ms and on every update, forcing a layout of the whole page each time it had
+  changed; on a 9,000-book library's shelf (~12,000 elements) that was 150-260 ms apiece in the
+  field. It now measures only when the bar changes size (ResizeObserver; marked
+  `hobesman fork`).
 - **Home page shown late**: the home page waits for the hero carousel when there is a Continue
   Listening shelf, but it recognised that shelf by the word "continue" in any shelf title, so a
   Continue Series shelf with nothing in progress meant waiting for a hero that never comes,

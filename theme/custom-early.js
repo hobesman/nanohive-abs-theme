@@ -91,9 +91,15 @@
   // seconds to produce it, so every return to the library meant a long wait.
   // The list is kept here (in memory, and in IndexedDB across reloads, per user
   // and per exact request), answered at once, and refreshed in the background:
-  // when ABS reports a change (its live socket events), and otherwise when the
-  // copy is over 2 minutes old as the panel asks for it, or over 10 minutes old
-  // when it is loaded ahead. A fresher copy replaces the one on screen
+  // when ABS reports a change (its live socket events), when the copy is over
+  // 6 hours old, and when a quick check says the library changed. That check
+  // (book count + newest book, one-item request, ~0.1 s for ABS) runs when the
+  // copy was last checked over 2 minutes ago as the panel asks for it, or over
+  // 10 minutes ago when it is loaded ahead. Downloading the whole list keeps a
+  // big library's ABS busy for seconds (seen in the field: ABS's own home page
+  // requests waiting 4-6 s behind it), so it only happens when needed.
+  // Series-page lists have no such check and are re-downloaded instead.
+  // A fresher copy replaces the one on screen
   // (enhancements.js hook window.__nhForkLf.fresh). Once the page is showing,
   // the list is also loaded ahead (window.__nhForkLf.warm), so the panel opens
   // straight away even the first time.
@@ -102,6 +108,7 @@
   const RE = /\/api\/libraries\/[^/?#]+\/(?:items\?(?:[^#]*&)?limit=0(?:&|$)|series\?limit=100000&filter=)/;
   const AGE_OPEN = 2 * 60 * 1000;
   const AGE_AHEAD = 10 * 60 * 1000;
+  const AGE_FULL = 6 * 3600 * 1000;
   const KEEP = 8; // stored lists (one per user + filter/sort combination)
   const DIR = 'nh-lfc-keys';
   const mem = {};
@@ -175,9 +182,23 @@
   })(0);
   const dirty = (k, e) => e.at < dirtyAll || (e.at < dirtyProgress && k.indexOf('progress') >= 0);
 
-  const respond = (text) => new Response(text, { status: 200, headers: { 'Content-Type': 'application/json' } });
+  // The list is parsed once per page session and the same data handed out on
+  // every later request: re-parsing it on each visit to the library page (twice,
+  // with the Readaloud watcher's copy) cost a big library ~10 MB of JSON each
+  // time. Readers only read it (the theme maps it into new arrays).
+  const parsed = (e) => { if (!e.data) e.data = JSON.parse(e.text); return e.data; };
+  function respond(e) {
+    const mk = () => {
+      const r = new Response('', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      r.json = () => Promise.resolve().then(() => parsed(e));
+      r.text = () => Promise.resolve(e.text);
+      r.clone = mk;
+      return r;
+    };
+    return mk();
+  }
 
-  // One download per list at a time; resolves { text } or { res } (not ok).
+  // One download per list at a time; resolves { e } (the new entry) or { res } (not ok).
   function load(f0, k, input, init) {
     if (!inflight[k]) {
       inflight[k] = f0(input, init).then((r) => {
@@ -185,20 +206,50 @@
         return r.text().then((text) => {
           const e = { text, at: Date.now() };
           mem[k] = e;
-          save(k, e);
-          return { text };
+          save(k, { text: e.text, at: e.at }); // never the parsed copy
+          return { e };
         });
       }).finally(() => { delete inflight[k]; });
     }
     return inflight[k];
   }
-  function refresh(f0, k, url, input, init, old) {
-    if (inflight[k]) return;
-    pageShown().then(() => load(f0, k, input, init)).then((x) => {
-      if (!x || x.text === undefined || x.text === old.text) return;
-      const j = JSON.parse(x.text);
-      if (j && Array.isArray(j.results) && window.__nhForkLf) window.__nhForkLf.fresh(url, j.results);
-    }).catch(() => {});
+  // Book count + newest book of a list, from the list itself or from ABS.
+  function listSig(data) {
+    const rows = (data && data.results) || [];
+    let best = null;
+    rows.forEach((li) => { if (li && (!best || (li.addedAt || 0) > (best.addedAt || 0))) best = li; });
+    return rows.length + '|' + (best ? best.id + '@' + best.addedAt : '');
+  }
+  function probe(f0, url, init) {
+    const u = new URL(url, location.origin);
+    if (!/\/items$/.test(u.pathname) || !u.searchParams.has('filter')) return Promise.resolve(null);
+    ['limit', '1', 'page', '0', 'sort', 'addedAt', 'desc', '1', 'minified', '1'].forEach((v, i, a) => { if (i % 2 === 0) u.searchParams.set(v, a[i + 1]); });
+    return f0(u.pathname + u.search, init)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        const r0 = j && Array.isArray(j.results) ? j.results[0] : undefined;
+        if (!j || typeof j.total !== 'number') return null; // can't tell: download
+        return j.total + '|' + (r0 ? r0.id + '@' + r0.addedAt : '');
+      })
+      .catch(() => null);
+  }
+  function refresh(f0, k, url, input, init, old, check) {
+    if (inflight[k] || old.checking) return;
+    old.checking = true;
+    pageShown()
+      .then(() => (check ? probe(f0, url, init) : null))
+      .then((sig) => {
+        old.checked = Date.now();
+        if (sig && sig === listSig(parsed(old))) return null; // unchanged
+        return load(f0, k, input, init);
+      })
+      .finally(() => { old.checking = false; })
+      .then((x) => {
+        if (!x || !x.e || x.e.text === old.text) return;
+        const j = parsed(x.e);
+        if (j && Array.isArray(j.results) && window.__nhForkLf) window.__nhForkLf.fresh(url, j.results);
+      })
+      .catch(() => {});
   }
 
   const f0 = window.fetch;
@@ -211,10 +262,12 @@
     const isAhead = ahead;
     return lookup(k).then((e) => {
       if (e) {
-        if (dirty(k, e) || Date.now() - e.at > (isAhead ? AGE_AHEAD : AGE_OPEN)) refresh(f0, k, url, input, init, e);
-        return respond(e.text);
+        const now = Date.now();
+        if (dirty(k, e) || now - e.at > AGE_FULL) refresh(f0, k, url, input, init, e, false);
+        else if (now - (e.checked || e.at) > (isAhead ? AGE_AHEAD : AGE_OPEN)) refresh(f0, k, url, input, init, e, true);
+        return respond(e);
       }
-      return load(f0, k, input, init).then((x) => (x.text !== undefined ? respond(x.text) : x.res.clone()));
+      return load(f0, k, input, init).then((x) => (x.e ? respond(x.e) : x.res.clone()));
     });
   };
 
