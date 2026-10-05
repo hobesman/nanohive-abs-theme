@@ -1007,3 +1007,98 @@
     }
   }, true);
 })();
+
+(function () {
+  'use strict';
+
+  // ==========================================
+  // Load-timing report (troubleshooting slow page loads). Off by default.
+  // Turn on in the browser console:   localStorage.setItem('nh-timing', '1')
+  // then reload. Each page load / navigation prints a report to the console
+  // and keeps it in window.__nhTiming (copy(__nhTiming) copies it all).
+  // Turn off:                         localStorage.removeItem('nh-timing')
+  // ==========================================
+  let on = false;
+  try { on = localStorage.getItem('nh-timing') === '1' || /[?&]nhtiming\b/.test(location.search); } catch (e) {}
+  if (!on) return;
+
+  const ms = (x) => Math.round(x);
+  const reports = window.__nhTiming = [];
+  let longTasks = 0, longTaskCount = 0;
+  try {
+    new PerformanceObserver((l) => l.getEntries().forEach((e) => { longTasks += e.duration; longTaskCount++; }))
+      .observe({ type: 'longtask', buffered: true });
+  } catch (e) {}
+
+  // When the theme's covers lift: the boot veil (html.nh-ready) and the page
+  // mask (body.nh-page-ready / nh-series-ready).
+  let nav = { kind: 'full load', path: location.pathname, start: 0, veil: null, page: null, resFrom: 0 };
+  const seen = () => {
+    const now = performance.now();
+    if (nav.veil == null && document.documentElement.classList.contains('nh-ready')) nav.veil = now;
+    const b = document.body;
+    if (b && nav.page == null && (b.classList.contains('nh-page-ready') || b.classList.contains('nh-series-ready'))) {
+      nav.page = now;
+      const n = nav;
+      setTimeout(() => report(n), 3000); // let trailing requests land
+    }
+  };
+  new MutationObserver(seen).observe(document.documentElement, { attributes: true, attributeFilter: ['class'], subtree: true });
+  // Page mask never lifts: report anyway after 10 s.
+  setTimeout(() => { if (nav.page == null && nav.kind === 'full load') report(nav, true); }, 10000);
+
+  // In-app navigations (ABS is a single-page app).
+  const wrap = (k) => {
+    const orig = history[k];
+    history[k] = function () {
+      const before = location.pathname;
+      const r = orig.apply(this, arguments);
+      // ABS adjusts the URL while it boots: still part of the full load.
+      if (location.pathname !== before && nav.kind === 'full load' && nav.page == null) nav.path = location.pathname;
+      else if (location.pathname !== before) {
+        nav = { kind: 'in-app', path: location.pathname, start: performance.now(), veil: 'n/a', page: null, resFrom: performance.now() };
+        setTimeout(() => { if (nav.page == null) { const n = nav; report(n, true); } }, 10000);
+      }
+      return r;
+    };
+  };
+  wrap('pushState'); wrap('replaceState');
+
+  function report(n, timedOut) {
+    if (n.reported) return;
+    n.reported = true;
+    const out = { page: n.path, kind: n.kind };
+    if (n.kind === 'full load') {
+      const d = performance.getEntriesByType('navigation')[0];
+      if (d) {
+        out.htmlFirstByte = ms(d.responseStart);
+        out.htmlDone = ms(d.responseEnd);
+        out.htmlBytesOnWire = d.transferSize;
+        out.htmlBytes = d.decodedBodySize;
+        out.htmlCompressed = d.encodedBodySize > 0 && d.encodedBodySize < d.decodedBodySize * 0.8;
+        out.domReady = ms(d.domContentLoadedEventEnd);
+        out.loadEvent = ms(d.loadEventEnd);
+      }
+      out.veilLifted = n.veil == null ? 'not yet' : ms(n.veil);
+    }
+    out.pageShown = n.page == null ? (timedOut ? 'NOT within 10 s' : 'not yet') : ms(n.page - n.start);
+    out.longTasksMs = ms(longTasks);
+    out.longTaskCount = longTaskCount;
+    const res = performance.getEntriesByType('resource').filter((r) => r.startTime >= n.resFrom);
+    out.requests = res.length;
+    out.slowest = res.slice().sort((a, b) => b.duration - a.duration).slice(0, 12).map((r) => ({
+      url: r.name.replace(location.origin, '').slice(0, 110),
+      startedAt: ms(r.startTime - n.start),
+      took: ms(r.duration),
+      kb: Math.round((r.transferSize || r.encodedBodySize || 0) / 1024),
+    }));
+    reports.push(out);
+    try {
+      console.groupCollapsed('%c[NanoHive timing] ' + out.page + ' (' + out.kind + '): shown after ' + out.pageShown + ' ms', 'color:#e0c27a');
+      const head = Object.assign({}, out); delete head.slowest;
+      console.table(head);
+      console.table(out.slowest);
+      console.groupEnd();
+    } catch (e) {}
+  }
+})();
