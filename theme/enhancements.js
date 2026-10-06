@@ -3838,8 +3838,10 @@
     const eCover = escapeHtmlNH(d.coverUrl);
     const eLeft = escapeHtmlNH(d.leftSideText);
     const eRight = escapeHtmlNH(d.rightSideText);
+    // hobesman fork: data-item-id on the banner lets theme/custom.js badge a
+    // readaloud book's Read button.
     return `
-        <div class="nh-hero-banner" style="width: 100%; position: relative; overflow: hidden; background-color: var(--nh-raised); border-radius: 24px; padding: 48px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 20px 50px rgba(0,0,0,0.5); cursor: pointer; transition: transform 0.2s ease;">
+        <div class="nh-hero-banner" data-item-id="${escapeHtmlNH(d.id || '')}" style="width: 100%; position: relative; overflow: hidden; background-color: var(--nh-raised); border-radius: 24px; padding: 48px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 20px 50px rgba(0,0,0,0.5); cursor: pointer; transition: transform 0.2s ease;">
 
           <div class="nh-hero-bg" style="position: absolute; inset: -12%; background-image: url('${eCover}'); background-size: cover; background-position: center; filter: blur(60px) brightness(0.5) saturate(1.4); z-index: 0; pointer-events: none;"></div>
           <button class="nh-hero-x" type="button" title="${escapeHtmlNH(t.heroReset || '')}" aria-label="${escapeHtmlNH(t.heroReset || '')}">✕</button>

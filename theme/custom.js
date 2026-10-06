@@ -8,14 +8,15 @@
   'use strict';
 
   // ==========================================
-  // Readaloud badge: a speaker icon on the corner of the book page's Read
-  // button when the item has an ebook file with "readaloud" in its filename.
-  // Clicking it opens the read-along reader.
-  // Absolutely positioned inside the button, so the action row's layout (and
+  // Readaloud badge: a speaker icon on the corner of the Read button (on the
+  // book page, and on the home page carousel's slides) when the item has an
+  // ebook file with "readaloud" in its filename. Clicking it opens the
+  // read-along reader.
+  // Absolutely positioned inside the button, so the button row's layout (and
   // where it wraps) is unchanged.
   // ==========================================
   const css = `
-    #nh-readaloud-badge {
+    .nh-ra-badge {
         position: absolute; top: -9px; right: -9px; z-index: 2;
         display: inline-flex; align-items: center; justify-content: center;
         width: 26px; height: 26px; border-radius: 50%;
@@ -25,8 +26,9 @@
         box-shadow: 0 2px 6px rgba(0,0,0,0.45);
         cursor: pointer; transition: transform .15s ease;
     }
-    #nh-readaloud-badge svg { width: 15px; height: 15px; }
-    #nh-readaloud-badge:hover { transform: scale(1.15); }
+    .nh-ra-badge svg { width: 15px; height: 15px; }
+    .nh-ra-badge:hover { transform: scale(1.15); }
+    .nh-hero-read .nh-ra-badge, .nh-hero-read .nh-ra-badge * { color: var(--nh-amber, #e0c27a) !important; }
     /* core.js forces dark text on everything in the Read button
        (body #page-wrapper #item-page-wrapper button.abs-btn.bg-info *),
        so the badge's colors need a more specific selector to win. */
@@ -76,6 +78,25 @@
       title: md.title || '', author: md.authorName || '' };
   }
 
+  // The carousel fetches each slide's full record (expanded=1) anyway: read the
+  // readaloud file from those answers instead of asking ABS again.
+  const ITEM_RE = /\/api\/items\/([0-9a-f-]{36})\?(?:[^#]*&)?expanded=1(?:&|$)/;
+  const f0 = window.fetch;
+  window.fetch = function (input) {
+    const p = f0.apply(this, arguments);
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const m = ITEM_RE.exec(url);
+      if (m && (cache[m[1]] === undefined || cache[m[1]] === 'pending')) {
+        p.then((r) => {
+          if (!r || !r.ok) return;
+          r.clone().json().then((item) => { if (item && item.id === m[1]) { cache[m[1]] = readaloudFile(item); queueTick(); } }).catch(() => {});
+        }).catch(() => {});
+      }
+    } catch (e) {}
+    return p;
+  };
+
   function lookup(itemId) {
     cache[itemId] = 'pending';
     const t = token();
@@ -110,7 +131,55 @@
       || null;
   }
 
+  function makeBadge(id) {
+    const badge = document.createElement('span');
+    if (id) badge.id = id;
+    badge.className = 'nh-ra-badge';
+    badge.setAttribute('role', 'button');
+    badge.tabIndex = 0;
+    badge.innerHTML = SPEAKER_SVG;
+    // It sits inside a Read button: its click opens the read-along reader
+    // (theme/reader/readalong.js, loaded on first use), not ABS's reader.
+    const go = (e) => {
+      e.stopPropagation(); e.preventDefault();
+      const f = cache[badge.dataset.item];
+      if (!f || !f.ino) return;
+      import('/_nh/reader/readalong.js')
+        .then((m) => m.open({ itemId: badge.dataset.item, ino: f.ino, primary: f.primary, title: f.title, author: f.author }))
+        .catch((er) => { console.error('[nh-readalong]', er); alert('Could not open the read-along reader.'); });
+    };
+    badge.addEventListener('click', go);
+    badge.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') go(e); });
+    return badge;
+  }
+  function place(badge, btn, itemId, file) {
+    badge.dataset.item = itemId;
+    badge.title = 'Read and listen at the same time';
+    badge.setAttribute('aria-label', badge.title);
+    if (getComputedStyle(btn).position === 'static') btn.style.position = 'relative';
+    btn.appendChild(badge);
+  }
+
+  // Home page carousel: each slide's banner carries its item id
+  // (enhancements.js, marked hook). Slides are rebuilt freely, so this checks
+  // every Read button each tick and only touches ones without their badge.
+  function heroTick() {
+    document.querySelectorAll('#nh-hero-container .nh-hero-banner[data-item-id]').forEach((banner) => {
+      const id = banner.dataset.itemId;
+      const btn = banner.querySelector('.nh-hero-read');
+      if (!id || !btn) return;
+      const file = cache[id];
+      if (file === undefined) { lookup(id); return; } // the carousel's own answer was missed
+      const have = btn.querySelector('.nh-ra-badge');
+      if (!file || file === 'pending') { if (have) have.remove(); return; }
+      if (have && have.dataset.item === id) return;
+      if (have) have.remove();
+      place(makeBadge(''), btn, id, file);
+    });
+  }
+
   function tick() {
+    heroTick();
     const m = window.location.pathname.match(/\/item\/([^/?#]+)/);
     const itemId = m ? m[1] : null;
     let badge = document.getElementById('nh-readaloud-badge');
@@ -125,30 +194,8 @@
     }
     if (badge && badge.dataset.item === itemId && badge.parentElement === btn) return;
 
-    if (!badge) {
-      badge = document.createElement('span');
-      badge.id = 'nh-readaloud-badge';
-      badge.setAttribute('role', 'button');
-      badge.tabIndex = 0;
-      badge.innerHTML = SPEAKER_SVG;
-      // It sits inside the Read button: its click opens the read-along reader
-      // (theme/reader/readalong.js, loaded on first use), not ABS's reader.
-      const go = (e) => {
-        e.stopPropagation(); e.preventDefault();
-        const f = cache[badge.dataset.item];
-        if (!f || !f.ino) return;
-        import('/_nh/reader/readalong.js')
-          .then((m) => m.open({ itemId: badge.dataset.item, ino: f.ino, primary: f.primary, title: f.title, author: f.author }))
-          .catch((er) => { console.error('[nh-readalong]', er); alert('Could not open the read-along reader.'); });
-      };
-      badge.addEventListener('click', go);
-      badge.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') go(e); });
-    }
-    badge.dataset.item = itemId;
-    badge.title = 'Read along (' + file.name + ')';
-    badge.setAttribute('aria-label', badge.title);
-    if (getComputedStyle(btn).position === 'static') btn.style.position = 'relative';
-    btn.appendChild(badge);
+    if (!badge) badge = makeBadge('nh-readaloud-badge');
+    place(badge, btn, itemId, file);
   }
 
   let queued = false;

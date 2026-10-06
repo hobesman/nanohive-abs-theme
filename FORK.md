@@ -22,8 +22,9 @@ To keep merges clean, the fork's code lives in its own files:
 
 Upstream files carry only small hooks: two `sub_filter`s and one `include` at the end of
 `default.conf.template`, one performance fix in `theme/core.js`, three `COPY` lines in the `Dockerfile`, and small changes in
-`theme/enhancements.js` (marked `hobesman fork`): three one-line hooks (two for the Readaloud
-filter, one for search), a small hook for the Filter & sort list cache, and a few performance
+`theme/enhancements.js` (marked `hobesman fork`): four one-line hooks (two for the Readaloud
+filter, one for search, one for the carousel's readaloud badge), a small hook for the Filter &
+sort list cache, and a few performance
 fixes (see Performance).
 
 ## Performance
@@ -84,8 +85,11 @@ Big libraries loaded slowly through the theme (seconds, versus under one directl
 
 ### Readaloud badge
 
-On a book's page, a speaker icon sits on the corner of the **Read** button when the book has an
-ebook file with "readaloud" in its filename. Clicking it opens the read-along reader (below).
+On a book's page, and on the home page carousel, a speaker icon sits on the corner of the
+**Read** button when the book has an ebook file with "readaloud" in its filename ("Read and listen
+at the same time"). Clicking it opens the read-along reader (below). The carousel's slides carry
+their book's id (`data-item-id`, a marked one-attribute hook in `enhancements.js`), and the badge
+reads the files from the full record the carousel already downloads, so it costs no extra request.
 
 ### Search: similar matches
 
