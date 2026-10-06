@@ -264,12 +264,34 @@ class Player extends EventTarget {
     this.audio.addEventListener('timeupdate', () => this.#onTime())
     this.audio.addEventListener('ended', () => this.#onEnded())
     this.audio.addEventListener('play', () => this.#emit('state'))
-    this.audio.addEventListener('pause', () => this.#emit('state'))
+    this.audio.addEventListener('pause', () => {
+      // Swapping files mid-play pauses the element; that is not the reader stopping.
+      if (!this.#loadingFile) this.#wantPlay = false
+      this.#sounding = false
+      this.#busyUpdate()
+      this.#emit('state')
+    })
+    // Busy = play was asked for but nothing is audible yet: the chapter's audio
+    // is still downloading from the EPUB, or the element is buffering.
+    this.audio.addEventListener('playing', () => { this.#sounding = true; this.#busyUpdate() })
+    this.audio.addEventListener('waiting', () => { this.#sounding = false; this.#busyUpdate() })
+    this.audio.addEventListener('error', () => { this.#wantPlay = false; this.#busyUpdate() })
     this.audio.addEventListener('loadedmetadata', () => {
       if (this.fileIndex >= 0) this.tl.setDuration(this.fileIndex, this.audio.duration)
     })
   }
   #emit(type, detail) { this.dispatchEvent(new CustomEvent(type, { detail })) }
+  #wantPlay = false
+  #sounding = false
+  #busy = false
+  #busyUpdate() {
+    // Only while starting: a cancelled start (or a silent seek) may still be
+    // downloading, but nothing is waiting on it.
+    const b = this.#wantPlay && (this.#loadingFile || !this.#sounding)
+    if (b !== this.#busy) { this.#busy = b; this.#emit('loading', b) }
+  }
+  get busy() { return this.#busy }
+  get wantsPlay() { return this.#wantPlay }
   get playing() { return !this.audio.paused }
   get clip() { return this.clips[this.clipIndex] || null }
   globalTime() {
@@ -310,7 +332,7 @@ class Player extends EventTarget {
   async #load(i) {
     if (this.fileIndex === i && this.audio.src) return
     this.#loadingFile = true
-    this.#emit('loading', true)
+    this.#busyUpdate()
     try {
       const url = await this.#url(i)
       this.fileIndex = i
@@ -326,7 +348,7 @@ class Player extends EventTarget {
       this.#trimCache()
     } finally {
       this.#loadingFile = false
-      this.#emit('loading', false)
+      this.#busyUpdate()
     }
   }
   // Seek to a clip (or a time inside a file) and optionally play.
@@ -338,11 +360,19 @@ class Player extends EventTarget {
   async seekFile(fi, t, play = this.playing, ci) {
     const wasPlaying = play
     this.parked = null
-    await this.#load(fi)
+    if (wasPlaying) { this.#wantPlay = true; this.#busyUpdate() }
+    try {
+      await this.#load(fi)
+    } catch (e) {
+      this.#wantPlay = false; this.#busyUpdate()
+      throw e
+    }
     this.audio.currentTime = Math.max(0, t)
     this.audio.playbackRate = this.rate
     this.#setClip(ci != null ? ci : this.#clipAt(fi, t))
-    if (wasPlaying) await this.audio.play().catch((e) => this.#emit('error', e))
+    // Cancelled (pause pressed) while the audio was still downloading.
+    if (wasPlaying && !this.#wantPlay) return
+    if (wasPlaying) await this.#start()
   }
   async seekGlobal(T, play = this.playing) {
     const offs = this.tl.offsets
@@ -363,9 +393,21 @@ class Player extends EventTarget {
       const T = this.parked != null ? this.parked : this.clip ? this.clipStart(this.clip) : 0
       return this.seekGlobal(T, true)
     }
-    await this.audio.play().catch((e) => this.#emit('error', e))
+    this.#wantPlay = true
+    this.#busyUpdate()
+    await this.#start()
   }
-  pause() { this.audio.pause() }
+  async #start() {
+    await this.audio.play().catch((e) => {
+      this.#wantPlay = false; this.#busyUpdate()
+      this.#emit('error', e)
+    })
+  }
+  pause() {
+    this.#wantPlay = false
+    this.audio.pause()
+    this.#busyUpdate()
+  }
   get loadingFile() { return this.#loadingFile }
   setRate(r) { this.rate = r; this.audio.playbackRate = r }
   prev() {
@@ -686,7 +728,13 @@ const CSS = `
 #nh-ra .ra-seek input { flex: 1; accent-color: var(--ra-link); }
 #nh-ra .ra-ctl { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 4px; }
 #nh-ra .ra-play { width: 56px; height: 56px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--ra-link) !important; color: var(--ra-bg) !important; }
-#nh-ra .ra-play.busy { opacity: .6; }
+#nh-ra .ra-play { position: relative; }
+/* Starting: a ring spins round the button until the narration is audible
+   (the chapter's audio downloading from the EPUB, or buffering). */
+#nh-ra .ra-play.busy::after { content: ''; position: absolute; inset: -5px; border-radius: 50%; border: 3px solid transparent; border-top-color: var(--ra-link); border-right-color: var(--ra-link); animation: ra-spin .9s linear infinite; pointer-events: none; }
+#nh-ra .ra-play.busy svg { opacity: .7; }
+@keyframes ra-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #nh-ra .ra-play.busy::after { animation-duration: 2.5s; } }
 #nh-ra .ra-rate { min-width: 56px; height: 34px; border-radius: 17px; border: 1px solid color-mix(in srgb, var(--ra-fg) 25%, transparent) !important; font-size: .85rem; font-variant-numeric: tabular-nums; }
 #nh-ra .ra-chap { min-width: 56px; font-size: .78rem; opacity: .65; text-align: center; white-space: nowrap; }
 #nh-ra .ra-panel { position: absolute; top: 54px; bottom: 0; width: min(360px, 92vw); z-index: 5; background: var(--ra-bg); border: 1px solid color-mix(in srgb, var(--ra-fg) 14%, transparent); box-shadow: 0 10px 40px rgba(0,0,0,.35); overflow-y: auto; padding: 10px 0; }
@@ -823,6 +871,17 @@ class ReaderUI {
     if (m) { m.style.display = ''; m.innerHTML = `<div class="ra-err">${esc(e && e.message ? e.message : e)}</div>` }
   }
   #toast(e) { console.warn('[nh-readalong]', e) }
+  // Pause icon while playing or starting; a spinning ring while starting.
+  #renderPlay() {
+    const p = this.player, b = this.$('.ra-play')
+    if (!p || !b) return
+    const on = p.playing || p.wantsPlay
+    const icon = on ? 'pause' : 'play'
+    if (b.dataset.icon !== icon) { b.innerHTML = svg(icon, 26); b.dataset.icon = icon }
+    b.classList.toggle('busy', p.busy)
+    b.setAttribute('aria-busy', p.busy ? 'true' : 'false')
+    b.title = p.busy ? 'Loading audio… (click to cancel)' : on ? 'Pause (Space)' : 'Play (Space)'
+  }
 
   async start() {
     this.#mount()
@@ -943,13 +1002,13 @@ class ReaderUI {
       this.#renderChapter()
     })
     p.addEventListener('state', () => {
-      this.$('.ra-play').innerHTML = svg(p.playing ? 'pause' : 'play', 26)
+      this.#renderPlay()
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = p.playing ? 'playing' : 'paused'
       this.sync.tick(p.playing)
       if (p.playing) this.sync.ensureSession()
       else if (!p.loadingFile && !p.audio.ended) { this.sync.syncListening(this.toAbs(p.globalTime()), { force: true }); this.#saveReading(true) }
     })
-    p.addEventListener('loading', (e) => this.$('.ra-play').classList.toggle('busy', !!e.detail))
+    p.addEventListener('loading', () => this.#renderPlay())
     p.addEventListener('time', () => { this.#renderTime(); this.#follow() })
     p.addEventListener('error', (e) => this.#toast(e.detail))
     p.addEventListener('finished', () => {
@@ -1208,7 +1267,7 @@ class ReaderUI {
       case 'right': return this.view && this.view.goRight()
       case 'play':
         if (!p) return
-        if (p.playing) return p.pause()
+        if (p.playing || p.wantsPlay) return p.pause() // also cancels a start still loading
         this.followPausedUntil = 0
         if (!p.clip || (!this.#isVisible(p.clip) && this.lastRelocate)) {
           const first = this.#firstVisibleClip(this.lastRelocate)

@@ -134,6 +134,8 @@ plays the book's narration and highlights each sentence as it is read, turning p
 - Play/pause (Space), previous/next sentence (↑/↓), page turns (←/→ or the page edges), speed
   (presets from 0.75× to 5×, or any speed from 0.5× to 5× in 0.05 steps),
   contents, theme (dark/sepia/light) and text size. Tap a sentence to read from there.
+- After pressing play, a ring spins round the play button until the narration is audible (the
+  chapter's audio is downloaded from the EPUB first, and may buffer); pressing it again cancels.
 - Lock-screen / headphone controls through the browser's Media Session API.
 - The EPUB is read from ABS with HTTP range requests: only the parts being read or played are
   downloaded, never the whole file.
