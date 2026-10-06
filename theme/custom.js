@@ -661,6 +661,11 @@
       if (!map) return;
       results.forEach((li) => {
         if (!li || !li.id || li.mediaType === 'podcast' || RA.queued.has(li.id) || RA.skip.has(li.id)) return;
+        // A readaloud only ever comes with an ebook, and the list says which books
+        // have one (media.ebookFormat): the rest need no check. On a 9,000-book
+        // library checking every book meant hundreds of ABS batch requests,
+        // a few per page visit, competing with the page's own requests.
+        if (li.media && !li.media.ebookFormat) return;
         if (stale(li, map)) { RA.queued.add(li.id); RA.queue.push(li.id); }
       });
       run();

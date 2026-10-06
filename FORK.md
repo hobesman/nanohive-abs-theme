@@ -112,12 +112,14 @@ through NanoHive, are not affected. The theme's search bar marks its own searche
 list doesn't include file names, so which books have one is kept in a small shared index on the
 server (`/data/nh/readaloud.json`, keep the `/data/nh` volume):
 
-- When the panel downloads a library's book list, books the index doesn't know yet, or that ABS
-  says changed since (`updatedAt` / file count), are checked: 20 at a time, by the NanoHive
+- When the panel downloads a library's book list, books with an ebook (the list says which:
+  a readaloud only comes with one) that the index doesn't know yet, or that ABS says changed
+  since (`updatedAt` / file count), are checked: 20 at a time, by the NanoHive
   container asking ABS (`/api/items/batch/get` with the user's own token). Browsers only say
   which books to check, never what the answer is.
-- First build for 2,000 books in testing: about 30 s in the background, ABS averaging ~20% of
-  one core; after that only changed books are re-checked.
+- Books without an ebook are never sent for checking. 9,000-book test library with 600 ebooks:
+  30 check requests (about 30 s in the background) instead of 450; after that only changed books
+  are re-checked.
 
 ### Read-along reader
 
