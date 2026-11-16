@@ -53,6 +53,15 @@ Big libraries loaded slowly through the theme (seconds, versus under one directl
   something changed. A newer copy replaces the one on screen. The list is also loaded ahead once the library page is showing, so the panel opens
   at once. With ABS taking 8 s for the list in testing: back on the library page, the panel
   opened in 0.2–0.5 s instead of 7–8 s, and only the first visit ever has to wait.
+- **Covers stuck behind the book list**: ABS answers one request at a time, and building the
+  whole 9,000-book list in one request (`items?limit=0`) took it 6.3 s. Every cover on screen
+  waited for it: 21 ms each on their own, 4.7 s each while the list was being built. That
+  happened on every new browser, on every new ABS sort or filter in the panel (each is its own
+  list), and whenever the stored list was refreshed. The list is now downloaded in pages of
+  500 books (series: 200), each ~0.25 s for ABS, with the same filter and sort, so ABS answers
+  covers between pages (at most ~0.2 s late in testing). Downloads made ahead or in the
+  background also wait until the covers on screen have loaded (at most 6 s), unless a filter
+  or sort is in use, when the list is what the page is waiting for (`theme/custom-early.js`).
 - Two per-update layout reads in `enhancements.js` (the edit window's Goodreads line, the shelf
   centring) forced the browser to lay out the whole page on every theme update while a big
   shelf was built; both now skip that work.

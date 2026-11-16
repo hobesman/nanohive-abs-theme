@@ -97,7 +97,9 @@
   // copy was last checked over 2 minutes ago as the panel asks for it, or over
   // 10 minutes ago when it is loaded ahead. Downloading the whole list keeps a
   // big library's ABS busy for seconds (seen in the field: ABS's own home page
-  // requests waiting 4-6 s behind it), so it only happens when needed.
+  // requests waiting 4-6 s behind it), so it only happens when needed, and
+  // then in pages (paged() below) so ABS can answer covers in between.
+  // Background downloads also wait for the covers on screen (settled()).
   // Series-page lists have no such check and are re-downloaded instead.
   // A fresher copy replaces the one on screen
   // (enhancements.js hook window.__nhForkLf.fresh). Once the page is showing,
@@ -198,17 +200,82 @@
     return mk();
   }
 
+  // Waits for the page to be showing AND for the covers on screen to finish
+  // loading (at most 6 s), so a background download never queues the covers
+  // behind it. Ends at once when a filter or sort is in use (its chips are
+  // showing): then the list is what the page is waiting for.
+  function settled() {
+    return pageShown().then(() => new Promise((res) => {
+      const t0 = Date.now();
+      const wanted = () => !!document.querySelector('.nh-ff-chip');
+      const busy = () => Array.prototype.some.call(document.images, (im) => {
+        if (im.complete || !/\/cover/.test(im.src)) return false;
+        const b = im.getBoundingClientRect();
+        return b.bottom > 0 && b.top < innerHeight;
+      });
+      (function wait() {
+        if (wanted() || !busy() || Date.now() - t0 > 6000) res();
+        else setTimeout(wait, 150);
+      })();
+    }));
+  }
+
+  // The whole list in pages. ABS answers one request at a time, and building
+  // a 9,000-book list in one go (limit=0) took it 6.3 s in the field, during
+  // which every cover on screen waited (21 ms alone, 4.7 s behind the list).
+  // A 500-book page takes it ~0.25 s, so covers and the page's own requests
+  // get answered between pages. Same filter, sort and other parameters as the
+  // request, so the result is ABS's own list, in ABS's own order. Resolves the
+  // response text, or null when a page fails (the caller then asks in one go).
+  const PAGE_ITEMS = 500, PAGE_SERIES = 200, MAX_PAGES = 400;
+  function paged(f0, url, init) {
+    const u = new URL(url, location.origin);
+    const asked = u.searchParams.get('limit');
+    const size = /\/series$/.test(u.pathname) ? PAGE_SERIES : PAGE_ITEMS;
+    u.searchParams.set('limit', String(size));
+    const rows = [];
+    const seen = new Set();
+    let first = null;
+    const page = (n) => {
+      u.searchParams.set('page', String(n));
+      return f0(u.pathname + u.search, init)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          if (!j || !Array.isArray(j.results)) return null;
+          if (!first) first = j;
+          // A book added or removed mid-download can shift a row across a page
+          // boundary: never keep it twice.
+          j.results.forEach((x) => {
+            const id = x && x.id;
+            if (id && seen.has(id)) return;
+            if (id) seen.add(id);
+            rows.push(x);
+          });
+          if (j.results.length < size || n + 1 >= MAX_PAGES) {
+            return JSON.stringify(Object.assign({}, first, {
+              results: rows, total: rows.length, limit: Number(asked) || 0, page: 0,
+            }));
+          }
+          return page(n + 1);
+        });
+    };
+    return page(0).catch(() => null);
+  }
+
   // One download per list at a time; resolves { e } (the new entry) or { res } (not ok).
   function load(f0, k, input, init) {
     if (!inflight[k]) {
-      inflight[k] = f0(input, init).then((r) => {
-        if (!r.ok) return { res: r };
-        return r.text().then((text) => {
-          const e = { text, at: Date.now() };
-          mem[k] = e;
-          save(k, { text: e.text, at: e.at }); // never the parsed copy
-          return { e };
-        });
+      const url = typeof input === 'string' ? input : input.url;
+      const opts = init || (typeof input === 'string' ? undefined : { headers: input.headers, credentials: input.credentials });
+      inflight[k] = paged(f0, url, opts).then((text) => {
+        if (text !== null) return text;
+        return f0(input, init).then((r) => (r.ok ? r.text() : { res: r }));
+      }).then((text) => {
+        if (typeof text !== 'string') return text;
+        const e = { text, at: Date.now() };
+        mem[k] = e;
+        save(k, { text: e.text, at: e.at }); // never the parsed copy
+        return { e };
       }).finally(() => { delete inflight[k]; });
     }
     return inflight[k];
@@ -236,7 +303,7 @@
   function refresh(f0, k, url, input, init, old, check) {
     if (inflight[k] || old.checking) return;
     old.checking = true;
-    pageShown()
+    settled()
       .then(() => (check ? probe(f0, url, init) : null))
       .then((sig) => {
         old.checked = Date.now();
@@ -267,7 +334,11 @@
         else if (now - (e.checked || e.at) > (isAhead ? AGE_AHEAD : AGE_OPEN)) refresh(f0, k, url, input, init, e, true);
         return respond(e);
       }
-      return load(f0, k, input, init).then((x) => (x.e ? respond(x.e) : x.res.clone()));
+      // Loading ahead with nothing stored yet (first visit on this browser):
+      // let the covers on screen finish first.
+      return (isAhead ? settled() : Promise.resolve())
+        .then(() => load(f0, k, input, init))
+        .then((x) => (x.e ? respond(x.e) : x.res.clone()));
     });
   };
 
