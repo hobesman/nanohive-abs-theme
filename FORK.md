@@ -67,8 +67,10 @@ Big libraries loaded slowly through the theme (seconds, versus under one directl
   inside it, even in Detail view where it matches nothing: ~270 ms of style work each time
   the shelf added or removed a book (11 ms without it), so a jump-scroll in a 9,000-book
   library froze the page for up to 3.5 s and covers took 0.6–1.5 s, versus 0.3–0.5 s in plain
-  ABS. It is now a sibling selector picking the same elements (marked `hobesman fork`);
-  with it, scrolling measured the same as plain ABS.
+  ABS. The rule turned out to be unnecessary (the rule beside it already orders the shelf)
+  and is gone (marked `hobesman fork`); a sibling-selector rewrite still doubled the cost of
+  every `<body>` class change, which the theme makes on each page change. Scrolling now
+  measures the same as plain ABS.
 - Two per-update layout reads in `enhancements.js` (the edit window's Goodreads line, the shelf
   centring) forced the browser to lay out the whole page on every theme update while a big
   shelf was built; both now skip that work.

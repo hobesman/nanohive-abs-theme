@@ -551,12 +551,14 @@ div.fixed.right-4.z-50 > div span.material-symbols:hover { color: var(--nh-amber
    specific enough (id + :has) to win on its own. */
 #bookshelf div:has(> .bookshelf-row.categorizedBookshelfRow) { display: flex; flex-direction: column; }
 #bookshelf div:has(> .bookshelf-row.categorizedBookshelfRow) > .bookshelf-row { order: 2; }
-/* hobesman fork: the heading div always FOLLOWS the strip in ABS's BookShelfRow, so a
-   sibling selector picks the same elements. The old "div:has(> strip) > div:not(...)" form
-   cost Chrome ~250 ms of style recalculation on EVERY change anywhere in #bookshelf (adding
-   one element to a 9,000-book library shelf: 267 ms with it, 11 ms without), even in DETAIL
-   view where it matches nothing; that is what made scrolling and page changes crawl. */
-#bookshelf .bookshelf-row.categorizedBookshelfRow ~ div:not(.bookshelf-row) { order: 1; }
+/* hobesman fork: there was a third rule here giving the heading div "order: 1". It is not
+   needed: the strip's order 2 above already puts the heading (default order 0) first. It
+   was also the most expensive rule in the theme. As "div:has(> strip) > div:not(...)" it
+   cost Chrome ~250 ms of style work on EVERY change anywhere in #bookshelf (adding one
+   element to a 9,000-book library shelf: 267 ms with it, 11 ms without), even in DETAIL view
+   where it matches nothing. Rewritten as a sibling selector ("strip ~ div:not(...)") it still
+   doubled the cost of every <body> class change (140 ms -> 71 ms without it), and the theme
+   changes body classes on every page change. */
 #bookshelf .categorizedBookshelfRow { background-image: none !important; }
 #bookshelf .bookshelfDividerCategorized { display: none !important; }
 #bookshelf .categoryPlacard { position: static !important; transform: none !important; width: auto !important; text-align: left !important; letter-spacing: normal !important; border-radius: 0 !important; }
