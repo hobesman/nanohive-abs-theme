@@ -21,7 +21,7 @@ To keep merges clean, the fork's code lives in its own files:
 | `fork/nh-fork.js` | Server-side (njs) readaloud index |
 
 Upstream files carry only small hooks: two `sub_filter`s and one `include` at the end of
-`default.conf.template`, one performance fix in `theme/core.js`, three `COPY` lines in the `Dockerfile`, and small changes in
+`default.conf.template`, two performance fixes in `theme/core.js`, three `COPY` lines in the `Dockerfile`, and small changes in
 `theme/enhancements.js` (marked `hobesman fork`): four one-line hooks (two for the Readaloud
 filter, one for search, one for the carousel's readaloud badge), a small hook for the Filter &
 sort list cache, and a few performance
@@ -62,6 +62,13 @@ Big libraries loaded slowly through the theme (seconds, versus under one directl
   covers between pages (at most ~0.2 s late in testing). Downloads made ahead or in the
   background also wait until the covers on screen have loaded (at most 6 s), unless a filter
   or sort is in use, when the list is what the page is waiting for (`theme/custom-early.js`).
+- **Scrolling and page changes**: one shelf-heading rule in `core.js` used `:has()` in a form
+  (`div:has(> strip) > div:not(...)`) that made Chrome re-check the whole shelf on every change
+  inside it, even in Detail view where it matches nothing: ~270 ms of style work each time
+  the shelf added or removed a book (11 ms without it), so a jump-scroll in a 9,000-book
+  library froze the page for up to 3.5 s and covers took 0.6–1.5 s, versus 0.3–0.5 s in plain
+  ABS. It is now a sibling selector picking the same elements (marked `hobesman fork`);
+  with it, scrolling measured the same as plain ABS.
 - Two per-update layout reads in `enhancements.js` (the edit window's Goodreads line, the shelf
   centring) forced the browser to lay out the whole page on every theme update while a big
   shelf was built; both now skip that work.
