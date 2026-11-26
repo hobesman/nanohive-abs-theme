@@ -1245,3 +1245,326 @@
     });
   })(0);
 })();
+
+(function () {
+  'use strict';
+
+  // ==========================================
+  // Popular row: books from Audible's popular list that are in this library,
+  // in chart order, as a home page shelf ("Popular on Audible").
+  // The list comes from ReadMeABook through /_nh/rmab/popular
+  // (fork/nh-fork.locations.template). RMAB refreshes it daily and has already
+  // matched it against the library: isAvailable, and plexGuid = the ABS item id.
+  // ABS (/api/items/batch/get, the user's own token) then says which library
+  // each book is in, and its title, and leaves out books this user can't see.
+  // Both answers are kept in the browser (list 1 hour, books 1 day), so a
+  // normal home visit costs no request at all, and the first fetch waits until
+  // the home page is showing: ABS answers one request at a time, and the page's
+  // own shelves come first. NH_POPULAR (server env) sets how many books show;
+  // 0, or no NH_RMAB_URL, and the route answers 404 and there is no row.
+  // ==========================================
+  const ROW_ID = 'nh-popular-row';
+  const LIST_KEY = 'nh-pop-list';
+  const META_KEY = 'nh-pop-meta:';
+  const LIST_TTL = 60 * 60 * 1000;
+  const META_TTL = 24 * 60 * 60 * 1000;
+  const SETTLE_MS = 1500; // home page showing this long before the first fetch
+
+  const css = `
+    #${ROW_ID} { width: 100%; box-sizing: border-box; margin: 1.5em 0; }
+    #${ROW_ID} .nh-sa-head { margin: 0 0 14px; }
+    #${ROW_ID} .nh-pop-heading { font-family: var(--nh-serif), 'Spectral', serif !important; font-weight: 500; font-size: 1.55rem; letter-spacing: -0.01em; color: var(--nh-text-1, #f4eee2); margin: 0 !important; }
+    @media (max-width: 640px) { #${ROW_ID} .nh-pop-heading { font-size: 1.05rem; } #${ROW_ID} .nh-sa-head { margin-bottom: 10px; } }
+    #${ROW_ID} .nh-pop-scroll { display: flex; flex-wrap: nowrap; gap: 16px; overflow-x: auto; overflow-y: hidden; padding: 4px 2px 6px; scrollbar-width: none; }
+    #${ROW_ID} .nh-pop-scroll::-webkit-scrollbar { display: none; height: 0; width: 0; }
+    #${ROW_ID} .nh-pop-card { flex: 0 0 auto; width: var(--nh-pop-cw, 154px); text-decoration: none; cursor: pointer; }
+    #${ROW_ID} .nh-pop-cover { position: relative; width: var(--nh-pop-cw, 154px); height: var(--nh-pop-cw, 154px); border-radius: var(--nh-tile-r, 14px); background-position: center; background-size: cover; background-color: var(--nh-raised, #221e1a); box-shadow: var(--nh-tile-sh, 0 10px 24px rgba(0,0,0,0.40)); transition: filter .18s ease; }
+    html.nh-covers-std #${ROW_ID} .nh-pop-cover { height: calc(var(--nh-pop-cw, 154px) * 1.6); }
+    #${ROW_ID} .nh-pop-card:hover .nh-pop-cover { filter: brightness(0.7); }
+    #${ROW_ID} .nh-pop-rank { position: absolute; left: 8px; top: 8px; background: rgba(255,255,255,0.55); backdrop-filter: blur(10px) brightness(1.2); -webkit-backdrop-filter: blur(10px) brightness(1.2); border: 1px solid rgba(255,255,255,0.35); box-shadow: 0 2px 8px rgba(0,0,0,0.4); border-radius: 999px; min-width: 1.7em; text-align: center; padding: 0.12em 0.45em; color: #000; font-weight: 700; font-size: clamp(8px, calc(var(--nh-pop-cw, 154px) * 0.078), 12.5px); font-family: var(--nh-sans, system-ui); }
+    #${ROW_ID} .nh-pop-title { font-family: var(--nh-serif), 'Spectral', serif; font-size: var(--nh-pop-fs, 0.82rem); color: var(--nh-text-2, #d8cfc2); margin: 8px 0 0; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    #${ROW_ID} .nh-pop-author { font-family: var(--nh-sans, system-ui); font-size: calc(var(--nh-pop-fs, 0.82rem) * 0.88); color: var(--nh-muted-2, #9a9085); margin: 2px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  `;
+  const style = document.createElement('style');
+  style.id = 'nh-custom-pop-css';
+  style.textContent = css;
+  document.head.appendChild(style);
+
+  // Inline SVG chevrons (material-symbols ligatures don't always substitute in
+  // injected markup); the .nh-sa-* classes are the theme's own shelf arrows.
+  const CHEV = {
+    left: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5 8 12l7 7"/></svg>',
+    right: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>',
+  };
+
+  const token = () => (window.__nhFork && window.__nhFork.token()) || '';
+  const authHeaders = (json) => {
+    const h = {}; const t = token();
+    if (t) h.Authorization = 'Bearer ' + t;
+    if (json) h['Content-Type'] = 'application/json';
+    return h;
+  };
+  const load = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
+  const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+  const homeLib = () => { const m = location.pathname.match(/\/library\/([^/]+)\/?$/); return m ? m[1] : ''; };
+  const basePath = () => { const p = location.pathname; const i = p.indexOf('/library/'); return i > 0 ? p.slice(0, i) : ''; };
+  function userId() {
+    try { const u = window.$nuxt.$store.state.user.user; return (u && u.id) || ''; } catch (e) { return ''; }
+  }
+
+  // The element holding the home shelves (the one the theme's own rows go in,
+  // so the row also joins the home section order in the theme's settings).
+  function host() {
+    const r = document.querySelector('#bookshelf .bookshelf-row');
+    if (!r) return null;
+    let row = r;
+    if (!r.querySelector('h2')) {
+      let q = r.parentElement, hop = 0;
+      while (q && hop < 4) { if (q.querySelector('h2')) { row = q; break; } q = q.parentElement; hop++; }
+    }
+    return row.parentElement;
+  }
+  const shelfIdOf = (el) => {
+    const vm = el && el.__vue__;
+    if (!vm) return null;
+    return vm.shelfId || (vm.$props && vm.$props.shelfId) || (vm.shelf && vm.shelf.id) || null;
+  };
+
+  // ---- State ----
+  // list: { at, count, items: [{ id, rank }] } (in-library books only, chart order)
+  // meta: { <itemId>: { lib, t, a, at } }, per user (what a user may see differs)
+  let list = load(LIST_KEY);
+  let off = false;         // the route said 404: no row this page session
+  let listBusy = false;
+  let metaBusy = false;
+  let homeSince = 0;
+  let meta = null, metaUid = '';
+
+  function fetchList() {
+    listBusy = true;
+    let got = false;
+    fetch('/_nh/rmab/popular', { headers: authHeaders(false), credentials: 'include' })
+      .then((r) => {
+        if (r.status === 404) { off = true; return null; }
+        if (!r.ok) return null;
+        const n = parseInt(r.headers.get('X-NH-Popular-Count'), 10);
+        const count = Math.max(0, Math.min(100, isNaN(n) ? 20 : n));
+        return r.json().then((j) => {
+          const items = [];
+          ((j && j.audiobooks) || []).forEach((b, i) => {
+            if (b && b.isAvailable && b.plexGuid && /^[A-Za-z0-9_-]+$/.test(b.plexGuid)) items.push({ id: b.plexGuid, rank: i + 1 });
+          });
+          list = { at: Date.now(), count, items };
+          save(LIST_KEY, list);
+          got = true;
+        });
+      })
+      .catch(() => {})
+      .then(() => {
+        // RMAB down, slow or answering garbage: keep showing the last list (if
+        // any) and ask again in 5 minutes, not on every tick.
+        if (!got && !off) {
+          const retryAt = Date.now() - LIST_TTL + 5 * 60 * 1000;
+          list = list ? Object.assign({}, list, { at: retryAt }) : { at: retryAt, count: 0, items: [] };
+        }
+        listBusy = false; queueTick();
+      });
+  }
+
+  // Library, title and author for ids not yet known, 20 per request, one
+  // request at a time. An id ABS doesn't return (deleted, or not visible to
+  // this user) is recorded with lib '' so it isn't asked about again today.
+  function fetchMeta(ids) {
+    metaBusy = true;
+    const uid = metaUid;
+    const chunk = ids.slice(0, 20);
+    fetch('/api/items/batch/get', {
+      method: 'POST', credentials: 'include', headers: authHeaders(true),
+      body: JSON.stringify({ libraryItemIds: chunk }),
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((j) => {
+        if (uid !== metaUid) return;
+        const now = Date.now();
+        const seen = {};
+        ((j && (j.libraryItems || j.results)) || []).forEach((it) => {
+          if (!it || !it.id) return;
+          seen[it.id] = true;
+          const md = (it.media && it.media.metadata) || {};
+          meta[it.id] = { lib: it.libraryId || '', t: md.title || '', a: md.authorName || (md.authors || []).map((x) => x.name).join(', ') || '', at: now };
+        });
+        chunk.forEach((id) => { if (!seen[id]) meta[id] = { lib: '', t: '', a: '', at: now }; });
+        save(META_KEY + uid, meta);
+      })
+      .catch(() => {
+        // Ask again in 10 minutes, not in a loop now.
+        if (uid !== metaUid) return;
+        const at = Date.now() - META_TTL + 10 * 60 * 1000;
+        chunk.forEach((id) => { if (!meta[id]) meta[id] = { lib: '', t: '', a: '', at }; });
+      })
+      .then(() => { metaBusy = false; queueTick(); });
+  }
+
+  function remove() { const ex = document.getElementById(ROW_ID); if (ex) ex.remove(); }
+
+  // classList.toggle to the state it already has changes nothing, so this is
+  // safe to run every tick.
+  function syncArrows(row) {
+    const bar = row.querySelector('.nh-sa-head');
+    const sc = row.querySelector('.nh-pop-scroll');
+    if (!bar || !sc) return;
+    const max = sc.scrollWidth - sc.clientWidth;
+    bar.classList.toggle('nh-sa-on', max > 4);
+    bar.querySelector('.nh-sa-left').classList.toggle('nh-sa-off', sc.scrollLeft <= 2);
+    bar.querySelector('.nh-sa-right').classList.toggle('nh-sa-off', sc.scrollLeft >= max - 2);
+  }
+
+  const sigOf = (libId, books) => libId + '|' + books.map((b) => b.id + ':' + b.rank + ':' + meta[b.id].t).join(',');
+
+  function build(row, books, libId) {
+    const base = basePath();
+    const tk = token();
+    const tq = tk ? '&token=' + encodeURIComponent(tk) : '';
+    row.innerHTML = '';
+    const bar = document.createElement('div');
+    bar.className = 'nh-sa-head';
+    const h = document.createElement('h2');
+    h.className = 'nh-pop-heading';
+    h.textContent = 'Popular on Audible';
+    bar.appendChild(h);
+    const btns = document.createElement('div');
+    btns.className = 'nh-sa-btns';
+    const sc = document.createElement('div');
+    sc.className = 'nh-pop-scroll';
+    ['left', 'right'].forEach((dir) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'nh-sa-btn nh-sa-' + dir;
+      b.innerHTML = CHEV[dir];
+      b.setAttribute('aria-label', dir === 'left' ? 'Scroll left' : 'Scroll right');
+      b.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        sc.scrollBy({ left: (dir === 'left' ? -1 : 1) * Math.max(160, Math.round(sc.clientWidth * 0.9)), behavior: 'smooth' });
+      });
+      btns.appendChild(b);
+    });
+    bar.appendChild(btns);
+    row.appendChild(bar);
+    row.appendChild(sc);
+    sc.addEventListener('scroll', () => syncArrows(row), { passive: true });
+
+    books.forEach((b) => {
+      const m = meta[b.id];
+      const a = document.createElement('a');
+      a.className = 'nh-pop-card';
+      a.href = base + '/item/' + b.id;
+      a.title = m.t + (m.a ? ' · ' + m.a : '');
+      const cov = document.createElement('div');
+      cov.className = 'nh-pop-cover';
+      cov.style.backgroundImage = 'url("' + base + '/api/items/' + b.id + '/cover?width=400' + tq + '")';
+      const rk = document.createElement('div');
+      rk.className = 'nh-pop-rank';
+      rk.textContent = '#' + b.rank;
+      rk.title = 'Number ' + b.rank + ' on Audible\'s popular list';
+      cov.appendChild(rk);
+      a.appendChild(cov);
+      const t = document.createElement('p');
+      t.className = 'nh-pop-title';
+      t.textContent = m.t;
+      a.appendChild(t);
+      if (m.a) {
+        const au = document.createElement('p');
+        au.className = 'nh-pop-author';
+        au.textContent = m.a;
+        a.appendChild(au);
+      }
+      // In-app navigation, so a playing book keeps playing. Modified clicks
+      // (new tab etc.) keep the plain link.
+      a.addEventListener('click', (e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button > 0) return;
+        try { if (window.$nuxt && window.$nuxt.$router) { e.preventDefault(); window.$nuxt.$router.push('/item/' + b.id); } } catch (err) {}
+      });
+      sc.appendChild(a);
+    });
+    row.dataset.sig = sigOf(libId, books);
+  }
+
+  // Cover size, title size and indent follow ABS's own shelves (and its
+  // cover-size button), measured off a real cover on the page. Only written on
+  // a change, so this can't feed the mutation observer.
+  function fit(row, hostEl) {
+    const setVar = (k, v) => { if (row.style.getPropertyValue(k) !== v) row.style.setProperty(k, v); };
+    const own = (el) => el.closest('#' + ROW_ID) || el.closest('#nh-hero-container') || el.closest('#nh-recent-series-row') || el.closest('#nh-rate-finished-row') || el.closest('#nh-mark-finished-row');
+    for (const el of document.querySelectorAll('#bookshelf [id^="cover-area-"]')) {
+      if (own(el)) continue;
+      const w = el.getBoundingClientRect().width;
+      if (w > 40) { setVar('--nh-pop-cw', Math.round(w) + 'px'); break; }
+    }
+    for (const el of document.querySelectorAll('#bookshelf [cy-id="title"]')) {
+      if (own(el)) continue;
+      if (el.getBoundingClientRect().width > 10) { setVar('--nh-pop-fs', getComputedStyle(el).fontSize); break; }
+    }
+    const strip = hostEl.querySelector('.bookshelf-row');
+    if (strip) {
+      const cs = getComputedStyle(strip);
+      if (row.style.paddingLeft !== cs.paddingLeft) row.style.paddingLeft = cs.paddingLeft;
+      if (row.style.paddingRight !== cs.paddingRight) row.style.paddingRight = cs.paddingRight;
+    }
+    syncArrows(row);
+  }
+
+  function tick() {
+    const libId = homeLib();
+    const hostEl = libId && !off ? host() : null;
+    if (!hostEl || !token()) { remove(); homeSince = 0; return; }
+    if (!homeSince) homeSince = Date.now();
+
+    const uid = userId();
+    if (!uid) return;
+    if (uid !== metaUid) { metaUid = uid; meta = load(META_KEY + uid) || {}; }
+
+    const now = Date.now();
+    const settled = now - homeSince > SETTLE_MS;
+    if ((!list || now - list.at > LIST_TTL) && !listBusy && settled) fetchList();
+    if (!list || !list.count) { remove(); return; }
+
+    // Walk down the chart only as far as the row needs: books in this
+    // library, skipping ones that turned out to be elsewhere or hidden.
+    const books = [];
+    const need = [];
+    for (const b of list.items) {
+      const m = meta[b.id];
+      if (!m || now - m.at > META_TTL) { need.push(b.id); continue; }
+      if (m.lib === libId) books.push(b);
+      if (books.length >= list.count) break;
+    }
+    let row = document.getElementById(ROW_ID);
+    if (need.length && books.length < list.count) {
+      if (!metaBusy && settled) fetchMeta(need);
+      if (!row) return; // the first build waits for the lookups, so it doesn't grow card by card
+    }
+    if (!books.length) { remove(); return; }
+    if (!row) { row = document.createElement('div'); row.id = ROW_ID; }
+    if (row.dataset.sig !== sigOf(libId, books)) build(row, books, libId);
+
+    // Placed before ABS's Recently Added shelf (else at the end). The theme's
+    // home section order, when set, moves it with CSS order instead.
+    if (row.parentNode !== hostEl) {
+      const anchor = Array.prototype.find.call(hostEl.children, (el) => el !== row && (shelfIdOf(el) === 'recently-added' || shelfIdOf(el.querySelector('.bookshelf-row')) === 'recently-added'));
+      if (anchor) hostEl.insertBefore(row, anchor); else hostEl.appendChild(row);
+    }
+    fit(row, hostEl);
+  }
+
+  let queued = false;
+  function queueTick() {
+    if (queued) return;
+    queued = true;
+    setTimeout(() => { queued = false; try { tick(); } catch (e) {} }, 120);
+  }
+  try {
+    new MutationObserver(queueTick).observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e) {}
+  setInterval(queueTick, 1000);
+  window.addEventListener('resize', queueTick);
+})();

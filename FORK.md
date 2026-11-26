@@ -197,3 +197,28 @@ network, using RMAB's service name). The token stays on the server; the browser 
 `/_nh/rmab/*`, which needs a signed-in ABS user and can only search and create requests. All
 requests appear in RMAB under the token's user, and that user's approval settings apply. Without
 `NH_RMAB_URL` the button doesn't appear.
+
+### Popular on Audible (home row)
+
+A **Popular on Audible** row on each library's home page, just above Recently Added, shows
+the books from Audible's popular list that are in that library, in chart order, with their
+place on the chart (`#1`, `#7`…) on the cover. Clicking one opens the book.
+
+The list comes from ReadMeABook (same `NH_RMAB_URL` / `NH_RMAB_TOKEN` as above), which
+refreshes it daily from Audible and already knows which entries are in your library and their
+ABS item ids. The browser gets it through `/_nh/rmab/popular` (signed-in ABS users only;
+the top 100, nothing else). ABS is then asked, with the user's own token, which library each
+of those books is in, so a library only shows its own books and a user only sees books they
+have access to. Both answers are kept in the browser (the list for an hour, the books for a
+day), so most home visits make no extra requests; the first fetch waits until the home page
+is showing, so the page's own shelves load first. If RMAB is down or doesn't answer, the
+home page is unaffected: the row keeps the last list the browser had (or doesn't appear),
+and the browser asks again 5 minutes later. The row takes part in the theme's home
+section order.
+
+```yaml
+    environment:
+      NH_POPULAR: "20"   # how many books the row shows (default 20, at most 100); 0 = no row
+```
+
+Without `NH_RMAB_URL` there is no row.

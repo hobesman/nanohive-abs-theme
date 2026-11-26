@@ -91,3 +91,30 @@ location = /_nh/rmab/request {
     proxy_set_header Accept-Encoding "";
     proxy_read_timeout 45s;
 }
+
+# Popular row on the home page (theme/custom.js): RMAB's copy of Audible's
+# popular list (top 100, refreshed daily by RMAB), which RMAB has already
+# matched against the library: isAvailable + plexGuid (the ABS item id). The
+# query is fixed here, so the browser can't page through anything else.
+# NH_POPULAR: how many books the row shows (0 = row off). Sent back in a
+# header so the theme needs no setting of its own.
+location = /_nh/rmab/popular {
+    auth_request /_nh/api/whoami;
+    limit_except GET { deny all; }
+    set $nh_rmab "${NH_RMAB_URL}";
+    if ($nh_rmab = "") { return 404; }
+    set $nh_pop "${NH_POPULAR}";
+    if ($nh_pop = "0") { return 404; }
+    resolver ${NH_RESOLVER} valid=30s ipv6=off;
+    resolver_timeout 5s;
+    proxy_connect_timeout 5s;
+    proxy_pass $nh_rmab/api/audiobooks/popular?page=1&limit=100;
+    proxy_set_header Host $proxy_host;
+    proxy_ssl_server_name on;
+    proxy_set_header Authorization "Bearer ${NH_RMAB_TOKEN}";
+    proxy_set_header Cookie "";
+    proxy_set_header Accept-Encoding "";
+    proxy_read_timeout 30s;
+    add_header X-NH-Popular-Count $nh_pop always;
+    add_header Cache-Control "no-store" always;
+}

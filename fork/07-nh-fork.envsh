@@ -7,6 +7,13 @@
 # unset one would stay as a literal ${...} in the nginx config.
 export NH_RMAB_URL="${NH_RMAB_URL:-}"
 export NH_RMAB_TOKEN="${NH_RMAB_TOKEN:-}"
+# Popular row (theme/custom.js): how many of your books from RMAB's popular list
+# the home page shows, at most 100. 0 turns the row off. Needs NH_RMAB_URL.
+export NH_POPULAR="${NH_POPULAR:-20}"
+case "$NH_POPULAR" in
+  ''|*[!0-9]*) echo "ERROR: NH_POPULAR must be a whole number (got '$NH_POPULAR')" >&2; exit 1 ;;
+esac
+if [ "$NH_POPULAR" -gt 100 ]; then export NH_POPULAR=100; fi
 
 case "$NH_RMAB_URL" in
   '') ;;
